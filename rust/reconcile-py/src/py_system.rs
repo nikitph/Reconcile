@@ -660,6 +660,56 @@ impl PyReconcileSystem {
         self.kernel.decision_nodes.push(node);
         Ok(())
     }
+
+    // --- Interface Projection Engine ---
+
+    /// Compute the interface projection for a resource viewed by a role.
+    /// Returns what the role can see, do, and not do.
+    fn project(&self, resource_id: String, role: String) -> PyResult<PyInterfaceProjection> {
+        let rid = parse_resource_id(&resource_id)?;
+        let projection = self.kernel.project(&rid, &role)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(PyInterfaceProjection { inner: projection })
+    }
+
+    /// Batch projection for all resources of a type.
+    fn project_list(&self, resource_type: String, role: String) -> Vec<PyInterfaceProjection> {
+        self.kernel.project_list(&resource_type, &role)
+            .into_iter()
+            .map(|p| PyInterfaceProjection { inner: p })
+            .collect()
+    }
+
+    /// Export the system definition as machine-readable JSON.
+    fn export_spec(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let spec = self.kernel.export_spec();
+        json_to_py(py, &spec)
+    }
+
+    /// Execute an action and return the new projection.
+    /// Convenience method: transition + project in one call.
+    #[pyo3(signature = (resource_id, action, actor, role, authority_level="INTERFACE".to_string()))]
+    fn execute_action(
+        &mut self,
+        resource_id: String,
+        action: String,
+        actor: String,
+        role: String,
+        authority_level: String,
+    ) -> PyResult<(PyTransitionResult, Option<PyInterfaceProjection>)> {
+        let result = self.transition(
+            resource_id.clone(), action, actor, role.clone(), authority_level,
+        )?;
+
+        let projection = if result.success {
+            let rid = parse_resource_id(&resource_id)?;
+            self.kernel.project(&rid, &role).ok().map(|p| PyInterfaceProjection { inner: p })
+        } else {
+            None
+        };
+
+        Ok((result, projection))
+    }
 }
 
 fn parse_resource_id(s: &str) -> PyResult<ResourceId> {

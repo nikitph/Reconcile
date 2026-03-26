@@ -275,8 +275,8 @@ impl Kernel {
             });
         }
 
-        // Step 2: check_role_permissions
-        if authority_level == AuthorityLevel::Human {
+        // Step 2: check_role_permissions (Human and Interface require RBAC)
+        if authority_level == AuthorityLevel::Human || authority_level == AuthorityLevel::Interface {
             if !self
                 .role_registry
                 .check_permission(role, "transition", &resource_type, to_state)
@@ -836,6 +836,112 @@ impl Kernel {
     /// Get pending proposals (for inspection/testing).
     pub fn pending_proposals(&self) -> &[Proposal] {
         &self.pending_proposals
+    }
+
+    // --- Interface Projection Engine ---
+
+    /// Compute the interface projection for a resource viewed by a role.
+    /// This is the core product function. Pure read-only.
+    pub fn project(
+        &self,
+        resource_id: &ResourceId,
+        role: &str,
+    ) -> Result<crate::projection::InterfaceProjection, KernelError> {
+        let resource = self
+            .storage
+            .state_store()
+            .get(resource_id)
+            .ok_or_else(|| KernelError::ResourceNotFound(resource_id.clone()))?;
+
+        let sm = self.registry.get_state_machine(&resource.resource_type)?;
+
+        let query = KernelQuery {
+            storage: self.storage.as_ref(),
+            instance_graph: self.instance_graph.as_ref(),
+        };
+
+        let audit_records = self.storage.audit_store().get_by_resource(resource_id);
+
+        Ok(crate::projection::compute_projection(
+            &resource,
+            role,
+            sm,
+            &self.role_registry,
+            &self.policy_engine,
+            &self.invariant_checker,
+            &query,
+            &self.pending_proposals,
+            &audit_records,
+        ))
+    }
+
+    /// Batch projection for all resources of a type.
+    pub fn project_list(
+        &self,
+        resource_type: &str,
+        role: &str,
+    ) -> Vec<crate::projection::InterfaceProjection> {
+        self.storage
+            .state_store()
+            .list_by_type(resource_type)
+            .iter()
+            .filter_map(|r| self.project(&r.id, role).ok())
+            .collect()
+    }
+
+    /// Export the system definition as machine-readable JSON.
+    /// Contains all types, states, transitions, roles, policy/invariant names.
+    /// No runtime state — just the governance model.
+    pub fn export_spec(&self) -> serde_json::Value {
+        let types: Vec<serde_json::Value> = self.registry.list_types().iter().map(|type_name| {
+            let sm = self.registry.get_state_machine(type_name).ok();
+            let states: Vec<String> = sm.as_ref()
+                .map(|s| s.state_names().iter().map(|n| n.to_string()).collect())
+                .unwrap_or_default();
+            let transitions: Vec<serde_json::Value> = sm.as_ref()
+                .map(|s| {
+                    let mut result = Vec::new();
+                    for state in s.state_names() {
+                        for t in s.get_valid_transitions(state) {
+                            result.push(serde_json::json!({
+                                "from": t.from_state,
+                                "to": t.to_state,
+                            }));
+                        }
+                    }
+                    result
+                })
+                .unwrap_or_default();
+
+            serde_json::json!({
+                "name": type_name,
+                "states": states,
+                "transitions": transitions,
+                "initial_state": sm.map(|s| s.initial_state().to_string()),
+            })
+        }).collect();
+
+        let relationships: Vec<serde_json::Value> = self.schema_graph.get_relationships()
+            .iter()
+            .map(|r| serde_json::json!({
+                "from_type": r.from_type,
+                "to_type": r.to_type,
+                "relation": r.relation,
+                "required": r.required,
+                "foreign_key": r.foreign_key,
+            }))
+            .collect();
+
+        serde_json::json!({
+            "version": "0.1.0",
+            "types": types,
+            "relationships": relationships,
+            "policy_count": self.policy_engine.policy_count(),
+            "invariant_count": self.invariant_checker.invariant_count(),
+            "controller_count": self.controller_scheduler.controller_count(),
+            "agent_count": self.agent_scheduler.agent_count(),
+            "decision_node_count": self.decision_nodes.len(),
+        })
     }
 }
 

@@ -35,6 +35,8 @@ impl Default for ResourceId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorityLevel {
     Human,
+    /// User confirmed an LLM-presented option (distinguishes AI-influenced decisions)
+    Interface,
     Controller,
     Agent,
     System,
@@ -44,6 +46,7 @@ impl fmt::Display for AuthorityLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Human => write!(f, "HUMAN"),
+            Self::Interface => write!(f, "INTERFACE"),
             Self::Controller => write!(f, "CONTROLLER"),
             Self::Agent => write!(f, "AGENT"),
             Self::System => write!(f, "SYSTEM"),
@@ -55,6 +58,7 @@ impl AuthorityLevel {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "HUMAN" => Some(Self::Human),
+            "INTERFACE" => Some(Self::Interface),
             "CONTROLLER" => Some(Self::Controller),
             "AGENT" => Some(Self::Agent),
             "SYSTEM" => Some(Self::System),

@@ -19,6 +19,7 @@ pub mod decision;
 pub mod circuit_breaker;
 pub mod saga;
 pub mod workflow;
+pub mod projection;
 pub mod transaction;
 
 #[cfg(test)]

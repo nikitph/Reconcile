@@ -18,5 +18,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyInvariantResult>()?;
     m.add_class::<PyAuthorityLevel>()?;
     m.add_class::<PyQueryContext>()?;
+    m.add_class::<PyInterfaceProjection>()?;
     Ok(())
 }

@@ -158,3 +158,22 @@ class SystemWrapper:
     def graph_degree(self, resource_id: str, edge_type: str | None = None):
         """Get connection count."""
         return self._system.graph_degree(resource_id, edge_type)
+
+    # --- Interface Projection ---
+
+    def project(self, resource_id: str, role: str):
+        """Compute the interface projection for a resource viewed by a role."""
+        return self._system.project(resource_id, role)
+
+    def project_list(self, role: str):
+        """Batch projection for all resources of this type."""
+        return self._system.project_list(self._resource_type, role)
+
+    def export_spec(self):
+        """Export the system definition as machine-readable JSON."""
+        return self._system.export_spec()
+
+    def execute_action(self, resource_id: str, action: str, *, actor: str,
+                       role: str, authority_level: str = "INTERFACE"):
+        """Execute an action and return the new projection."""
+        return self._system.execute_action(resource_id, action, actor, role, authority_level)

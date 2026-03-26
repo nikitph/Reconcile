@@ -396,6 +396,76 @@ impl PyInvariantResult {
 }
 
 // ---------------------------------------------------------------------------
+// InterfaceProjection — the core product type
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "InterfaceProjection")]
+#[derive(Clone)]
+pub struct PyInterfaceProjection {
+    pub inner: reconcile_core::projection::InterfaceProjection,
+}
+
+#[pymethods]
+impl PyInterfaceProjection {
+    #[getter]
+    fn resource(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let r = &self.inner.resource;
+        let dict = pyo3::types::PyDict::new(py);
+        let _ = dict.set_item("id", &r.id);
+        let _ = dict.set_item("resource_type", &r.resource_type);
+        let _ = dict.set_item("state", &r.state);
+        let _ = dict.set_item("desired_state", &r.desired_state);
+        let _ = dict.set_item("data", json_to_py(py, &r.data)?);
+        let _ = dict.set_item("version", r.version);
+        let _ = dict.set_item("is_terminal", r.is_terminal);
+        Ok(dict.into_any().unbind())
+    }
+
+    #[getter]
+    fn valid_actions(&self) -> Vec<(String, String)> {
+        self.inner.valid_actions.iter()
+            .map(|a| (a.action.clone(), a.action_type.clone()))
+            .collect()
+    }
+
+    #[getter]
+    fn blocked_actions(&self) -> Vec<(String, String, String)> {
+        self.inner.blocked_actions.iter()
+            .map(|a| (a.action.clone(), a.reason.clone(), a.blocked_by.clone()))
+            .collect()
+    }
+
+    #[getter]
+    fn warnings(&self) -> Vec<(String, String, String)> {
+        self.inner.warnings.iter()
+            .map(|w| (w.message.clone(), w.source.clone(), w.severity.clone()))
+            .collect()
+    }
+
+    #[getter]
+    fn proposals(&self) -> Vec<(String, String, f64, String)> {
+        self.inner.proposals.iter()
+            .map(|p| (p.agent.clone(), p.action.clone(), p.confidence, p.reasoning.clone()))
+            .collect()
+    }
+
+    #[getter]
+    fn audit_summary(&self) -> Vec<(String, String, String, String, String)> {
+        self.inner.audit_summary.iter()
+            .map(|a| (a.actor.clone(), a.from_state.clone(), a.to_state.clone(),
+                       a.authority_level.clone(), a.timestamp.clone()))
+            .collect()
+    }
+
+    /// Serialize the entire projection to JSON.
+    fn to_json(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let json = serde_json::to_value(&self.inner)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        json_to_py(py, &json)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // QueryContext — wraps a &dyn SystemQuery for Python callbacks
 // ---------------------------------------------------------------------------
 
