@@ -29,7 +29,7 @@ def loan_system():
 def loan_system_with_policies():
     """Loan system with a high-value policy."""
 
-    def high_value_check(resource, ctx):
+    def high_value_check(resource, ctx, query):
         amount = resource.data.get("amount", 0)
         if amount > 5_000_000:
             return PolicyResult.deny(f"Loan amount {amount} exceeds 50L limit")
@@ -66,7 +66,7 @@ def loan_system_with_policies():
 def loan_system_with_invariants():
     """Loan system with a strong invariant."""
 
-    def positive_amount(resource):
+    def positive_amount(resource, query):
         amount = resource.data.get("amount", 0)
         if amount > 0:
             return InvariantResult.ok()

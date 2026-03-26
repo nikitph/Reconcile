@@ -6,6 +6,7 @@ mod loan_origination {
     //! Full banking loan origination workflow with multi-level approvals,
     //! policies, invariants, and controllers.
 
+    use crate::invariant_checker::SystemQuery;
     use crate::policy_engine::{PolicyDefinition, PolicyEvaluator};
     use crate::resource_registry::ResourceTypeDefinition;
     use crate::roles::{Permission, RoleDefinition};
@@ -133,7 +134,7 @@ mod loan_origination {
         // Policy: loans > 1M need senior review
         struct SeniorReviewPolicy;
         impl PolicyEvaluator for SeniorReviewPolicy {
-            fn evaluate(&self, r: &Resource, ctx: &TransitionContext) -> PolicyResult {
+            fn evaluate(&self, r: &Resource, ctx: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
                 let amount = r.data.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 // Block direct UNDERWRITING -> APPROVED for high-value loans
                 if ctx.from_state == "UNDERWRITING" && ctx.to_state == "APPROVED" && amount > 1_000_000.0 {
@@ -374,7 +375,7 @@ mod insurance_claims {
 
         struct ClaimCap;
         impl PolicyEvaluator for ClaimCap {
-            fn evaluate(&self, r: &Resource, ctx: &TransitionContext) -> PolicyResult {
+            fn evaluate(&self, r: &Resource, ctx: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
                 if ctx.to_state == "APPROVED" {
                     let amount = r.data.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     if amount > 500_000.0 {
@@ -1019,20 +1020,27 @@ mod event_pattern_edge_cases {
 
 #[cfg(test)]
 mod policy_engine_edge_cases {
+    use crate::invariant_checker::SystemQuery;
     use crate::policy_engine::*;
     use crate::types::*;
     use chrono::Utc;
 
+    struct EmptyQuery;
+    impl SystemQuery for EmptyQuery {
+        fn get_resource(&self, _id: &ResourceId) -> Option<Resource> { None }
+        fn list_by_type(&self, _t: &str) -> Vec<Resource> { vec![] }
+    }
+
     struct AllowAll;
     impl PolicyEvaluator for AllowAll {
-        fn evaluate(&self, _r: &Resource, _c: &TransitionContext) -> PolicyResult {
+        fn evaluate(&self, _r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
             PolicyResult::allow()
         }
     }
 
     struct DenyIf { field: String, threshold: f64 }
     impl PolicyEvaluator for DenyIf {
-        fn evaluate(&self, r: &Resource, _c: &TransitionContext) -> PolicyResult {
+        fn evaluate(&self, r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
             let val = r.data.get(&self.field).and_then(|v| v.as_f64()).unwrap_or(0.0);
             if val > self.threshold {
                 PolicyResult::deny(format!("{} = {} exceeds {}", self.field, val, self.threshold))
@@ -1064,8 +1072,8 @@ mod policy_engine_edge_cases {
         let engine = PolicyEngine::new();
         let r = make_resource("loan", "APPLIED", serde_json::json!({}));
         let ctx = make_ctx(&r, "UW");
-        assert!(engine.first_denied(&r, &ctx).is_none());
-        assert!(engine.evaluate_all(&r, &ctx).is_empty());
+        assert!(engine.first_denied(&r, &ctx, &EmptyQuery).is_none());
+        assert!(engine.evaluate_all(&r, &ctx, &EmptyQuery).is_empty());
     }
 
     #[test]
@@ -1082,11 +1090,11 @@ mod policy_engine_edge_cases {
 
         let loan = make_resource("loan", "APPLIED", serde_json::json!({}));
         let ctx1 = make_ctx(&loan, "UW");
-        assert_eq!(engine.evaluate_all(&loan, &ctx1).len(), 1);
+        assert_eq!(engine.evaluate_all(&loan, &ctx1, &EmptyQuery).len(), 1);
 
         let claim = make_resource("claim", "FILED", serde_json::json!({}));
         let ctx2 = make_ctx(&claim, "REVIEW");
-        assert_eq!(engine.evaluate_all(&claim, &ctx2).len(), 1);
+        assert_eq!(engine.evaluate_all(&claim, &ctx2, &EmptyQuery).len(), 1);
     }
 
     #[test]
@@ -1105,7 +1113,7 @@ mod policy_engine_edge_cases {
 
         let r = make_resource("loan", "APPLIED", serde_json::json!({}));
         let ctx = make_ctx(&r, "UW");
-        let evals = engine.evaluate_all(&r, &ctx);
+        let evals = engine.evaluate_all(&r, &ctx, &EmptyQuery);
         assert_eq!(evals.len(), 20);
         // Verify priority ordering (highest first)
         assert_eq!(evals[0].name, "policy_19");
@@ -1134,7 +1142,7 @@ mod policy_engine_edge_cases {
 
         let r = make_resource("loan", "APPLIED", serde_json::json!({"amount": 100}));
         let ctx = make_ctx(&r, "UW");
-        let denied = engine.first_denied(&r, &ctx).unwrap();
+        let denied = engine.first_denied(&r, &ctx, &EmptyQuery).unwrap();
         assert_eq!(denied.name, "blocker"); // Highest priority reported
     }
 }

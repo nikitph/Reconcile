@@ -14,7 +14,7 @@ def claims_system():
 
     all_claims_total = {"value": 0.0}  # Closure-captured mutable state
 
-    def auto_approval_cap(resource, ctx):
+    def auto_approval_cap(resource, ctx, query):
         """Claims > 500K cannot be auto-approved."""
         if ctx.get("to_state") == "APPROVED":
             amount = resource.data.get("amount", 0)
@@ -24,7 +24,7 @@ def claims_system():
                 )
         return PolicyResult.allow()
 
-    def positive_claim_amount(resource):
+    def positive_claim_amount(resource, query):
         amount = resource.data.get("amount", 0)
         if amount <= 0:
             return InvariantResult.violated("Claim amount must be positive")
@@ -131,7 +131,7 @@ class TestFraudDetection:
     def test_fraud_controller_auto_flags(self):
         """Controller that auto-flags suspicious claims."""
 
-        def fraud_detector(resource):
+        def fraud_detector(resource, query):
             if resource.data.get("suspicious") and resource.state == "UNDER_INVESTIGATION":
                 return {"transition": "FRAUD_FLAGGED"}
             return None

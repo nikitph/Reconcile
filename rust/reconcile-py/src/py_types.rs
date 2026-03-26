@@ -1,5 +1,8 @@
 use pyo3::prelude::*;
+use reconcile_core::instance_graph::AggFn;
+use reconcile_core::invariant_checker::SystemQuery;
 use reconcile_core::types;
+use reconcile_core::types::ResourceId;
 
 // ---------------------------------------------------------------------------
 // AuthorityLevel enum
@@ -389,6 +392,99 @@ impl PyInvariantResult {
         Self {
             inner: types::InvariantResult::violated(message),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QueryContext — wraps a &dyn SystemQuery for Python callbacks
+// ---------------------------------------------------------------------------
+
+/// Temporary query object passed to Python policy/invariant/controller callbacks.
+/// Holds a raw pointer to the SystemQuery, valid only during the callback.
+/// This is safe because the callback executes synchronously within with_gil().
+#[pyclass(name = "QueryContext")]
+pub struct PyQueryContext {
+    query_ptr: *const dyn SystemQuery,
+}
+
+unsafe impl Send for PyQueryContext {}
+unsafe impl Sync for PyQueryContext {}
+
+impl PyQueryContext {
+    /// Create a PyQueryContext wrapping a SystemQuery reference.
+    /// SAFETY: The returned object must not outlive the referenced SystemQuery.
+    /// This is guaranteed because it's only created inside with_gil() blocks
+    /// that execute synchronously during the callback.
+    pub fn new(query: &dyn SystemQuery) -> Self {
+        // SAFETY: We erase the lifetime to store as raw pointer.
+        // The pointer is only dereferenced during the synchronous Python callback,
+        // while the KernelQuery on the Rust stack is still alive.
+        let ptr = unsafe {
+            std::mem::transmute::<*const dyn SystemQuery, *const dyn SystemQuery>(
+                query as *const dyn SystemQuery
+            )
+        };
+        Self { query_ptr: ptr }
+    }
+
+    fn query(&self) -> &dyn SystemQuery {
+        // SAFETY: This is called only during the synchronous Python callback,
+        // while the KernelQuery (holding immutable borrows on storage+graph)
+        // is still alive on the Rust stack.
+        unsafe { &*self.query_ptr }
+    }
+}
+
+#[pymethods]
+impl PyQueryContext {
+    /// Get a resource by ID.
+    fn get_resource(&self, resource_id: String) -> PyResult<Option<PyResource>> {
+        let uuid = uuid::Uuid::parse_str(&resource_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {}", e)))?;
+        Ok(self.query().get_resource(&ResourceId(uuid)).map(|r| PyResource { inner: r }))
+    }
+
+    /// List resources by type.
+    fn list_by_type(&self, resource_type: String) -> Vec<PyResource> {
+        self.query().list_by_type(&resource_type)
+            .into_iter()
+            .map(|r| PyResource { inner: r })
+            .collect()
+    }
+
+    /// Get neighbor resources via graph edges.
+    #[pyo3(signature = (resource_id, edge_type=None))]
+    fn graph_neighbors(&self, resource_id: String, edge_type: Option<String>) -> PyResult<Vec<PyResource>> {
+        let uuid = uuid::Uuid::parse_str(&resource_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {}", e)))?;
+        Ok(self.query().graph_neighbors(&ResourceId(uuid), edge_type.as_deref())
+            .into_iter()
+            .map(|r| PyResource { inner: r })
+            .collect())
+    }
+
+    /// Aggregate a field across graph neighbors.
+    #[pyo3(signature = (resource_id, edge_type, field, agg_fn="SUM".to_string()))]
+    fn graph_aggregate(&self, py: Python<'_>, resource_id: String, edge_type: String, field: String, agg_fn: String) -> PyResult<PyObject> {
+        let uuid = uuid::Uuid::parse_str(&resource_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {}", e)))?;
+        let result = self.query().graph_aggregate(&ResourceId(uuid), &edge_type, &field, &agg_fn);
+        json_to_py(py, &result)
+    }
+
+    /// Get connection count.
+    #[pyo3(signature = (resource_id, edge_type=None))]
+    fn graph_degree(&self, resource_id: String, edge_type: Option<String>) -> PyResult<usize> {
+        let uuid = uuid::Uuid::parse_str(&resource_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {}", e)))?;
+        Ok(self.query().graph_degree(&ResourceId(uuid), edge_type.as_deref()))
+    }
+
+    /// Check for cycles.
+    fn graph_has_cycle(&self, resource_id: String) -> PyResult<bool> {
+        let uuid = uuid::Uuid::parse_str(&resource_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid UUID: {}", e)))?;
+        Ok(self.query().graph_has_cycle(&ResourceId(uuid)))
     }
 }
 

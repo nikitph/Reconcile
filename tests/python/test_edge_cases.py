@@ -241,7 +241,7 @@ class TestErrorHandling:
 
     def test_policy_exception_treated_as_deny(self):
         """If a policy callback raises, it should deny."""
-        def buggy_policy(resource, ctx):
+        def buggy_policy(resource, ctx, query):
             raise ValueError("Unexpected error in policy")
 
         sys = define_system(
@@ -259,7 +259,7 @@ class TestErrorHandling:
 
     def test_invariant_exception_treated_as_violation(self):
         """If an invariant callback raises, it should be treated as violated."""
-        def buggy_invariant(resource):
+        def buggy_invariant(resource, query):
             raise RuntimeError("Unexpected error in invariant")
 
         sys = define_system(
@@ -314,7 +314,7 @@ class TestControllerEdgeCases:
         """Controller subscribes to both creation and transition events."""
         log = []
 
-        def logging_ctrl(resource):
+        def logging_ctrl(resource, query):
             log.append(f"{resource.state}")
             return None
 
@@ -339,7 +339,7 @@ class TestControllerEdgeCases:
 
     def test_controller_conditional_on_data(self):
         """Controller that acts based on resource data."""
-        def score_based(resource):
+        def score_based(resource, query):
             score = resource.data.get("risk_score", 0)
             if resource.state == "SCORING" and score > 0.8:
                 return {"transition": "HIGH_RISK"}

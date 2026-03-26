@@ -17,7 +17,7 @@ from reconcile.testing import SystemTestHarness
 def loan_origination():
     """Full loan origination system with 7 states, 4 roles, policies, invariants."""
 
-    def high_value_escalation(resource, ctx):
+    def high_value_escalation(resource, ctx, query):
         """Loans > 50L require senior review before approval."""
         amount = resource.data.get("amount", 0)
         if ctx.get("to_state") == "APPROVED" and ctx.get("from_state") == "UNDERWRITING":
@@ -27,14 +27,14 @@ def loan_origination():
                 )
         return PolicyResult.allow()
 
-    def minimum_amount(resource):
+    def minimum_amount(resource, query):
         """Loan amount must be positive."""
         amount = resource.data.get("amount", 0)
         if amount <= 0:
             return InvariantResult.violated(f"Loan amount must be positive, got {amount}")
         return InvariantResult.ok()
 
-    def docs_required_for_uw(resource):
+    def docs_required_for_uw(resource, query):
         """Underwriting requires document list."""
         if resource.state == "UNDERWRITING":
             docs = resource.data.get("documents", [])

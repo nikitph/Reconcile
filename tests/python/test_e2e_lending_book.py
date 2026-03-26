@@ -54,14 +54,14 @@ def bank():
     # --- Policies ---
 
     # 1. Exposure limit: total approved+disbursed loans per applicant < 2M
-    def exposure_limit_policy(resource, ctx):
+    def exposure_limit_policy(resource, ctx, query):
         if ctx.get("to_state") not in ("APPROVED", "DISBURSED"):
             return PolicyResult.allow()
         applicant_id = resource.data.get("applicant_id")
         if not applicant_id:
             return PolicyResult.allow()
         # Check current exposure via graph
-        current_exposure = sys.graph_aggregate(applicant_id, "belongs_to", "amount", "SUM")
+        current_exposure = query.graph_aggregate(applicant_id, "belongs_to", "amount", "SUM")
         if current_exposure is None:
             current_exposure = 0
         this_amount = resource.data.get("amount", 0)
@@ -79,7 +79,7 @@ def bank():
     )
 
     # 2. Collateral required for loans > 500K
-    def collateral_required(resource, ctx):
+    def collateral_required(resource, ctx, query):
         if ctx.get("to_state") != "APPROVED":
             return PolicyResult.allow()
         amount = resource.data.get("amount", 0)
@@ -95,7 +95,7 @@ def bank():
     )
 
     # --- Invariants ---
-    def positive_amount(resource):
+    def positive_amount(resource, query):
         if resource.resource_type != "loan":
             return InvariantResult.ok()
         amount = resource.data.get("amount", 0)
@@ -169,33 +169,33 @@ class TestExposureLimitEnforcement:
     """The exposure limit policy uses graph aggregation to block over-limit approvals."""
 
     def test_exposure_limit_blocks_over_limit_approval(self, bank):
+        """Graph aggregate sums ALL loans for applicant. Policy blocks when
+        current_exposure + this_amount > 2M."""
         app = bank.create("applicant", {"name": "Big Borrower"}, "sys", "SYSTEM")
 
-        # Create 3 loans of 600K each — total 1.8M (under 2M limit)
-        loan_ids = []
-        for i in range(3):
+        # Create and approve 2 small loans (500K each → total graph exposure 1M)
+        for _ in range(2):
             loan = bank.create("loan", {
-                "amount": 600_000, "applicant_id": app.resource.id,
+                "amount": 500_000, "applicant_id": app.resource.id,
             }, "sys", "SYSTEM")
-            assert loan.success
-            loan_ids.append(loan.resource.id)
+            bank.transition(loan.resource.id, "UNDERWRITING", "c", "clerk", "HUMAN")
+            r = bank.transition(loan.resource.id, "APPROVED", "u", "underwriter", "HUMAN")
+            assert r.success, f"Small loan approval should succeed: {r.rejected_reason}"
 
-        # Approve first two — exposure goes to 1.2M
-        for lid in loan_ids[:2]:
-            bank.transition(lid, "UNDERWRITING", "c", "clerk", "HUMAN")
-            r = bank.transition(lid, "APPROVED", "u", "underwriter", "HUMAN")
-            assert r.success, f"Approval should succeed: {r.rejected_reason}"
+        # Create a large loan that would push total over 2M
+        big_loan = bank.create("loan", {
+            "amount": 1_200_000, "applicant_id": app.resource.id,
+        }, "sys", "SYSTEM")
 
-        # Verify exposure via graph
+        # Graph exposure now: 500K + 500K + 1.2M = 2.2M
         exposure = bank.graph_aggregate(app.resource.id, "belongs_to", "amount", "SUM")
-        assert exposure == 1_800_000.0  # All 3 loans created, amounts sum
+        assert exposure == 2_200_000.0
 
-        # Third loan: move to underwriting, then try to approve
-        bank.transition(loan_ids[2], "UNDERWRITING", "c", "clerk", "HUMAN")
-        r = bank.transition(loan_ids[2], "APPROVED", "u", "underwriter", "HUMAN")
+        bank.transition(big_loan.resource.id, "UNDERWRITING", "c", "clerk", "HUMAN")
+        r = bank.transition(big_loan.resource.id, "APPROVED", "u", "underwriter", "HUMAN")
 
-        # Should be BLOCKED — 1.8M + 600K = 2.4M > 2M limit
-        assert not r.success, "Third approval should be blocked by exposure limit"
+        # Should be BLOCKED — 2.2M + 1.2M > 2M
+        assert not r.success, "Over-limit approval should be blocked"
         assert r.rejected_step == "evaluate_policies"
         assert "exposure" in r.rejected_reason.lower()
 
@@ -463,14 +463,14 @@ class TestControllerWithGraphData:
                           [("APPLIED", "APPROVED")], "APPLIED", ["APPROVED"])
         sys.register_relationship("loan", "applicant", "belongs_to", "many_to_one", True, "applicant_id")
 
-        def flag_high_exposure(resource):
+        def flag_high_exposure(resource, query):
             """When a loan is approved, check if applicant exposure is too high."""
             if resource.resource_type != "loan" or resource.state != "APPROVED":
                 return None
             applicant_id = resource.data.get("applicant_id")
             if not applicant_id:
                 return None
-            total = sys.graph_aggregate(applicant_id, "belongs_to", "amount", "SUM")
+            total = query.graph_aggregate(applicant_id, "belongs_to", "amount", "SUM")
             if total and total > 1_000_000:
                 # Flag the applicant (we return the applicant_id transition as a dict)
                 # Note: controllers currently act on the triggering resource, not others

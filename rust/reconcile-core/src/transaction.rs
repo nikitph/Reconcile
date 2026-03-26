@@ -286,8 +286,15 @@ impl Kernel {
             Err(e) => return Err(e),
         }
 
+        // Build read-only query context for policies and invariants.
+        // This borrows storage + graph immutably — safe while &mut self is held.
+        let query = KernelQuery {
+            storage: self.storage.as_ref(),
+            instance_graph: self.instance_graph.as_ref(),
+        };
+
         // Step 4: evaluate_policies
-        if let Some(denied) = self.policy_engine.first_denied(&resource, &context) {
+        if let Some(denied) = self.policy_engine.first_denied(&resource, &context, &query) {
             return Ok(TransitionOutcome::Rejected {
                 step: "evaluate_policies".into(),
                 reason: format!("Policy '{}' denied: {}", denied.name, denied.message),
@@ -296,16 +303,12 @@ impl Kernel {
         }
 
         // Collect all policy evaluations for audit
-        let policy_evals = self.policy_engine.evaluate_all(&resource, &context);
+        let policy_evals = self.policy_engine.evaluate_all(&resource, &context, &query);
 
         // Step 5: verify_invariants (strong only)
-        // We need to check what the resource would look like AFTER the transition
+        // Check what the resource would look like AFTER the transition
         let mut projected = resource.clone();
         projected.state = to_state.to_string();
-        let query = KernelQuery {
-            storage: self.storage.as_ref(),
-            instance_graph: self.instance_graph.as_ref(),
-        };
         let invariant_evals = self.invariant_checker.check_strong(&projected, &query);
         if let Some(violated) = invariant_evals.iter().find(|e| !e.holds) {
             return Ok(TransitionOutcome::Rejected {
@@ -845,7 +848,7 @@ mod tests {
 
         struct HighValueBlock;
         impl PolicyEvaluator for HighValueBlock {
-            fn evaluate(&self, r: &Resource, _c: &TransitionContext) -> PolicyResult {
+            fn evaluate(&self, r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
                 let amount = r.data.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 if amount > 5_000_000.0 {
                     PolicyResult::deny("High value loans need committee approval")

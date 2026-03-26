@@ -23,7 +23,7 @@ def test_policy_blocks(loan_system_with_policies):
 
 def test_policy_state_scoping():
     """Policy only applies in APPLIED state, not UNDERWRITING."""
-    def applied_only_block(resource, ctx):
+    def applied_only_block(resource, ctx, query):
         return PolicyResult.deny("blocked")
 
     sys = define_system(
@@ -53,7 +53,7 @@ def test_policy_state_scoping():
 
 def test_policy_returns_bool():
     """Policy can return True/False instead of PolicyResult."""
-    def bool_policy(resource, ctx):
+    def bool_policy(resource, ctx, query):
         return resource.data.get("amount", 0) < 1_000_000
 
     sys = define_system(
@@ -85,8 +85,8 @@ def test_multiple_policies():
         transitions=[("A", "B")],
         terminal_states=["B"],
         policies=[
-            {"name": "p1", "evaluate": lambda r, c: PolicyResult.allow(), "priority": 90},
-            {"name": "p2", "evaluate": lambda r, c: PolicyResult.deny("nope"), "priority": 10},
+            {"name": "p1", "evaluate": lambda r, c, q: PolicyResult.allow(), "priority": 90},
+            {"name": "p2", "evaluate": lambda r, c, q: PolicyResult.deny("nope"), "priority": 10},
         ],
     )
 

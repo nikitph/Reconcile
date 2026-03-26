@@ -119,12 +119,13 @@ impl PolicyEngine {
         &self,
         resource: &Resource,
         context: &TransitionContext,
+        query: &dyn SystemQuery,
     ) -> Vec<PolicyEvaluation> {
         let applicable = self.get_applicable(&resource.resource_type, &resource.state);
         applicable
             .iter()
             .map(|policy| {
-                let result = policy.evaluator.evaluate(resource, context);
+                let result = policy.evaluator.evaluate(resource, context, query);
                 PolicyEvaluation {
                     name: policy.name.clone(),
                     passed: result.passed,
@@ -139,10 +140,11 @@ impl PolicyEngine {
         &self,
         resource: &Resource,
         context: &TransitionContext,
+        query: &dyn SystemQuery,
     ) -> Option<PolicyEvaluation> {
         let applicable = self.get_applicable(&resource.resource_type, &resource.state);
         for policy in applicable {
-            let result = policy.evaluator.evaluate(resource, context);
+            let result = policy.evaluator.evaluate(resource, context, query);
             if !result.passed {
                 return Some(PolicyEvaluation {
                     name: policy.name.clone(),
@@ -172,26 +174,32 @@ impl Default for PolicyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AuthorityLevel, ResourceId};
+    use crate::types::{AuthorityLevel, Resource, ResourceId};
     use chrono::Utc;
+
+    struct EmptyQuery;
+    impl SystemQuery for EmptyQuery {
+        fn get_resource(&self, _id: &ResourceId) -> Option<Resource> { None }
+        fn list_by_type(&self, _t: &str) -> Vec<Resource> { vec![] }
+    }
 
     struct AllowAll;
     impl PolicyEvaluator for AllowAll {
-        fn evaluate(&self, _r: &Resource, _c: &TransitionContext) -> PolicyResult {
+        fn evaluate(&self, _r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
             PolicyResult::allow()
         }
     }
 
     struct DenyAll(String);
     impl PolicyEvaluator for DenyAll {
-        fn evaluate(&self, _r: &Resource, _c: &TransitionContext) -> PolicyResult {
+        fn evaluate(&self, _r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
             PolicyResult::deny(&self.0)
         }
     }
 
     struct AmountLimit(f64);
     impl PolicyEvaluator for AmountLimit {
-        fn evaluate(&self, r: &Resource, _c: &TransitionContext) -> PolicyResult {
+        fn evaluate(&self, r: &Resource, _c: &TransitionContext, _q: &dyn SystemQuery) -> PolicyResult {
             let amount = r.data.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if amount > self.0 {
                 PolicyResult::deny(format!("Amount {} exceeds limit {}", amount, self.0))
@@ -240,7 +248,7 @@ mod tests {
 
         let r = make_resource(serde_json::json!({}));
         let ctx = make_context(&r);
-        let evals = engine.evaluate_all(&r, &ctx);
+        let evals = engine.evaluate_all(&r, &ctx, &EmptyQuery);
         assert_eq!(evals.len(), 1);
         assert!(evals[0].passed);
     }
@@ -259,7 +267,7 @@ mod tests {
 
         let r = make_resource(serde_json::json!({}));
         let ctx = make_context(&r);
-        let denied = engine.first_denied(&r, &ctx);
+        let denied = engine.first_denied(&r, &ctx, &EmptyQuery);
         assert!(denied.is_some());
         assert_eq!(denied.unwrap().name, "deny_all");
     }
@@ -278,11 +286,11 @@ mod tests {
 
         let small = make_resource(serde_json::json!({"amount": 1_000_000}));
         let ctx_small = make_context(&small);
-        assert!(engine.first_denied(&small, &ctx_small).is_none());
+        assert!(engine.first_denied(&small, &ctx_small, &EmptyQuery).is_none());
 
         let big = make_resource(serde_json::json!({"amount": 10_000_000}));
         let ctx_big = make_context(&big);
-        assert!(engine.first_denied(&big, &ctx_big).is_some());
+        assert!(engine.first_denied(&big, &ctx_big, &EmptyQuery).is_some());
     }
 
     #[test]
@@ -300,7 +308,7 @@ mod tests {
         // Resource in UNDERWRITING -> policy applies
         let r1 = make_resource(serde_json::json!({}));
         let ctx1 = make_context(&r1);
-        assert!(engine.first_denied(&r1, &ctx1).is_some());
+        assert!(engine.first_denied(&r1, &ctx1, &EmptyQuery).is_some());
 
         // Resource in APPLIED -> policy does not apply
         let mut r2 = make_resource(serde_json::json!({}));
@@ -314,7 +322,7 @@ mod tests {
             role: "officer".into(),
             authority_level: AuthorityLevel::Human,
         };
-        assert!(engine.first_denied(&r2, &ctx2).is_none());
+        assert!(engine.first_denied(&r2, &ctx2, &EmptyQuery).is_none());
     }
 
     #[test]
@@ -339,7 +347,7 @@ mod tests {
 
         let r = make_resource(serde_json::json!({}));
         let ctx = make_context(&r);
-        let evals = engine.evaluate_all(&r, &ctx);
+        let evals = engine.evaluate_all(&r, &ctx, &EmptyQuery);
         // High priority should be first
         assert_eq!(evals[0].name, "high_priority");
         assert_eq!(evals[1].name, "low_priority");

@@ -16,7 +16,7 @@ class TestCascadeErrorSemantics:
 
     def test_original_transition_survives_cascade_error(self):
         """If a cascade controller fails, the original transition should still be visible."""
-        def broken_controller(resource):
+        def broken_controller(resource, query):
             if resource.state == "B":
                 # Try to transition to a non-existent state - this will fail
                 return {"transition": "NONEXISTENT"}
@@ -53,7 +53,7 @@ class TestCascadeErrorSemantics:
 
     def test_cascade_rejection_does_not_crash(self):
         """Controller action that gets rejected shouldn't crash the system."""
-        def always_tries_invalid(resource):
+        def always_tries_invalid(resource, query):
             # Always tries to transition to the current state (might be invalid)
             return {"transition": resource.state}
 
@@ -83,13 +83,13 @@ class TestCascadeDepthEnforcement:
         """Two controllers that trigger each other should eventually stop."""
         call_count = {"value": 0}
 
-        def ping_controller(resource):
+        def ping_controller(resource, query):
             call_count["value"] += 1
             if resource.state == "PING" and call_count["value"] < 50:
                 return {"transition": "PONG"}
             return None
 
-        def pong_controller(resource):
+        def pong_controller(resource, query):
             call_count["value"] += 1
             if resource.state == "PONG" and call_count["value"] < 50:
                 return {"transition": "PING"}
@@ -149,7 +149,7 @@ class TestCascadeDepthEnforcement:
             to_s = f"S{i+1}"
 
             def make_ctrl(from_state, to_state):
-                def ctrl(resource):
+                def ctrl(resource, query):
                     if resource.state == from_state:
                         return {"transition": to_state}
                     return None
@@ -193,10 +193,10 @@ class TestControllerErrorHandling:
         """A controller that raises should not prevent other controllers from running."""
         good_calls = []
 
-        def crashing_controller(resource):
+        def crashing_controller(resource, query):
             raise RuntimeError("I am broken!")
 
-        def good_controller(resource):
+        def good_controller(resource, query):
             good_calls.append(resource.state)
             return None
 
@@ -229,7 +229,7 @@ class TestControllerErrorHandling:
 
     def test_crashing_controller_doesnt_corrupt_state(self):
         """A controller that raises should not leave the resource in a bad state."""
-        def crasher(resource):
+        def crasher(resource, query):
             raise ValueError("Something went wrong")
 
         sys = define_system(
@@ -260,7 +260,7 @@ class TestPolicyCallbackSafety:
 
     def test_policy_returning_none_allows(self):
         """A policy that returns None = no opinion = allow (explicit design choice)."""
-        def returns_none(resource, ctx):
+        def returns_none(resource, ctx, query):
             return None
 
         sys = define_system(
@@ -280,7 +280,7 @@ class TestPolicyCallbackSafety:
 
     def test_policy_returning_integer_denies_fail_closed(self):
         """A policy returning an unrecognized type (int) is denied (fail-closed)."""
-        def returns_int(resource, ctx):
+        def returns_int(resource, ctx, query):
             return 42
 
         sys = define_system(
@@ -302,7 +302,7 @@ class TestPolicyCallbackSafety:
 
     def test_policy_raising_exception_denies(self):
         """A policy that raises should deny (confirmed working)."""
-        def exploding_policy(resource, ctx):
+        def exploding_policy(resource, ctx, query):
             raise RuntimeError("Policy crashed!")
 
         sys = define_system(
@@ -335,7 +335,7 @@ class TestAtomicityGuarantees:
             terminal_states=["B"],
             policies=[{
                 "name": "always_deny",
-                "evaluate": lambda r, c: PolicyResult.deny("nope"),
+                "evaluate": lambda r, c, q: PolicyResult.deny("nope"),
             }],
         )
 
@@ -358,7 +358,7 @@ class TestAtomicityGuarantees:
 
     def test_failed_invariant_leaves_no_side_effects(self):
         """If a strong invariant blocks, no mutations at all."""
-        def block_b(resource):
+        def block_b(resource, query):
             if resource.state == "B":
                 return InvariantResult.violated("Cannot be in B")
             return InvariantResult.ok()
@@ -415,7 +415,7 @@ class TestDesiredStateRobustness:
         """If a policy blocks the shortest path, reconciliation should handle it."""
         #   A -> B -> D (shortest, but B->D is policy-blocked)
         #   A -> B -> C -> D (longer path)
-        def block_b_to_d(resource, ctx):
+        def block_b_to_d(resource, ctx, query):
             if ctx.get("from_state") == "B" and ctx.get("to_state") == "D":
                 return PolicyResult.deny("B->D is blocked")
             return PolicyResult.allow()
@@ -477,7 +477,7 @@ class TestEventPatternEdgeCases:
     def test_controller_on_exact_event_type(self):
         calls = []
 
-        def tracker(resource):
+        def tracker(resource, query):
             calls.append(resource.state)
             return None
 
@@ -505,7 +505,7 @@ class TestEventPatternEdgeCases:
     def test_wildcard_controller_sees_everything(self):
         calls = []
 
-        def tracker(resource):
+        def tracker(resource, query):
             calls.append(1)
             return None
 

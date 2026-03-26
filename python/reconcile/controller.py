@@ -13,8 +13,12 @@ class Controller:
     on_events: list[str] = []
     authority_level: str = "CONTROLLER"
 
-    def reconcile(self, resource, ctx=None):
+    def reconcile(self, resource, query):
         """Called when a matching event fires or during reconciliation.
+
+        Args:
+            resource: The resource to reconcile.
+            query: QueryContext for reading graph/state data.
 
         Return:
             - None or "noop": no action

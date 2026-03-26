@@ -26,7 +26,7 @@ unsafe impl Send for PyPolicyBridge {}
 unsafe impl Sync for PyPolicyBridge {}
 
 impl PolicyEvaluator for PyPolicyBridge {
-    fn evaluate(&self, resource: &Resource, context: &TransitionContext) -> PolicyResult {
+    fn evaluate(&self, resource: &Resource, context: &TransitionContext, query: &dyn SystemQuery) -> PolicyResult {
         Python::with_gil(|py| {
             let py_resource = PyResource {
                 inner: resource.clone(),
@@ -37,8 +37,9 @@ impl PolicyEvaluator for PyPolicyBridge {
             let _ = py_ctx.set_item("actor", &context.actor);
             let _ = py_ctx.set_item("role", &context.role);
             let _ = py_ctx.set_item("authority_level", context.authority_level.to_string());
+            let py_query = PyQueryContext::new(query);
 
-            match self.callable.call1(py, (py_resource, py_ctx.as_any())) {
+            match self.callable.call1(py, (py_resource, py_ctx.as_any(), py_query)) {
                 Ok(result) => {
                     if result.is_none(py) {
                         // None return = no opinion = allow (explicit choice)
@@ -73,13 +74,14 @@ unsafe impl Send for PyInvariantBridge {}
 unsafe impl Sync for PyInvariantBridge {}
 
 impl InvariantCheck for PyInvariantBridge {
-    fn check(&self, resource: &Resource, _query: &dyn SystemQuery) -> InvariantResult {
+    fn check(&self, resource: &Resource, query: &dyn SystemQuery) -> InvariantResult {
         Python::with_gil(|py| {
             let py_resource = PyResource {
                 inner: resource.clone(),
             };
+            let py_query = PyQueryContext::new(query);
 
-            match self.callable.call1(py, (py_resource,)) {
+            match self.callable.call1(py, (py_resource, py_query)) {
                 Ok(result) => {
                     if result.is_none(py) {
                         // None return = no opinion = holds
@@ -117,14 +119,15 @@ impl ControllerHandler for PyControllerBridge {
     fn reconcile(
         &self,
         resource: &Resource,
-        _query: &dyn SystemQuery,
+        query: &dyn SystemQuery,
     ) -> Result<ControllerAction, KernelError> {
         Python::with_gil(|py| {
             let py_resource = PyResource {
                 inner: resource.clone(),
             };
+            let py_query = PyQueryContext::new(query);
 
-            match self.callable.call1(py, (py_resource,)) {
+            match self.callable.call1(py, (py_resource, py_query)) {
                 Ok(result) => {
                     // Controller can return:
                     // - None / "noop" -> NoOp

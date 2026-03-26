@@ -5,7 +5,7 @@ from reconcile import define_system
 
 def test_reactive_controller():
     """Controller that auto-transitions on creation."""
-    def auto_uw(resource):
+    def auto_uw(resource, query):
         if resource.state == "APPLIED":
             return {"transition": "UNDERWRITING"}
         return None
@@ -33,7 +33,7 @@ def test_reactive_controller():
 
 def test_controller_noop():
     """Controller that returns None does nothing."""
-    def noop_ctrl(resource):
+    def noop_ctrl(resource, query):
         return None
 
     sys = define_system(
@@ -58,7 +58,7 @@ def test_controller_event_filtering():
     """Controller only fires on matching events."""
     calls = []
 
-    def tracking_ctrl(resource):
+    def tracking_ctrl(resource, query):
         calls.append(resource.state)
         return None
 
@@ -91,7 +91,7 @@ def test_controller_with_class():
         priority = 80
         on_events = ["loan.created"]
 
-        def reconcile(self, resource, ctx=None):
+        def reconcile(self, resource, query):
             if resource.data.get("risk", 0) > 0.9:
                 return {"transition": "REJECTED"}
             return None

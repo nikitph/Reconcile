@@ -198,7 +198,7 @@ class TestPgPoliciesAndInvariants:
     """Policies and invariants work with PG backend."""
 
     def test_policy_with_pg(self):
-        def amount_limit(resource, ctx):
+        def amount_limit(resource, ctx, query):
             if resource.data.get("amount", 0) > 1_000_000:
                 return PolicyResult.deny("Too much")
             return PolicyResult.allow()
@@ -230,7 +230,7 @@ class TestPgPoliciesAndInvariants:
         assert "limit" in result.rejected_reason.lower()
 
     def test_invariant_with_pg(self):
-        def positive(resource):
+        def positive(resource, query):
             if resource.data.get("amount", 0) <= 0:
                 return InvariantResult.violated("Must be positive")
             return InvariantResult.ok()

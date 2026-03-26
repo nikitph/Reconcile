@@ -20,7 +20,7 @@ def test_strong_invariant_allows_valid(loan_system_with_invariants):
 def test_invariant_checked_on_transition():
     """Strong invariant checked on the post-transition state."""
 
-    def no_approved_without_score(resource):
+    def no_approved_without_score(resource, query):
         if resource.state == "APPROVED":
             if "score" not in resource.data or resource.data["score"] is None:
                 return InvariantResult.violated("Approved loans must have a score")
@@ -66,7 +66,7 @@ def test_invariant_returns_bool():
             "name": "bool_inv",
             "mode": "strong",
             "scope": "resource",
-            "check": lambda r: r.data.get("valid", False),
+            "check": lambda r, q: r.data.get("valid", False),
         }],
     )
 
@@ -88,9 +88,9 @@ def test_multiple_invariants():
         terminal_states=["B"],
         invariants=[
             {"name": "inv1", "mode": "strong", "scope": "resource",
-             "check": lambda r: InvariantResult.ok()},
+             "check": lambda r, q: InvariantResult.ok()},
             {"name": "inv2", "mode": "strong", "scope": "resource",
-             "check": lambda r: InvariantResult.violated("always fails")},
+             "check": lambda r, q: InvariantResult.violated("always fails")},
         ],
     )
 
