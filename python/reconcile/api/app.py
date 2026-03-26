@@ -29,6 +29,46 @@ def create_app(system: ReconcileSystem) -> FastAPI:
     """Create a FastAPI app wrapping a ReconcileSystem."""
     app = FastAPI(title="Reconcile API", version="0.1.0")
 
+    @app.get("/api/spec")
+    def get_spec():
+        return system.export_spec()
+
+    # --- Interface Projection ---
+
+    @app.get("/api/interface/{resource_type}/{resource_id}")
+    def get_projection(resource_type: str, resource_id: str, role: str):
+        try:
+            projection = system.project(resource_id, role)
+            return projection.to_json()
+        except Exception as e:
+            raise HTTPException(400, detail=str(e))
+
+    @app.get("/api/interface/{resource_type}")
+    def get_projections(resource_type: str, role: str):
+        projections = system.project_list(resource_type, role)
+        return [p.to_json() for p in projections]
+
+    class ActionRequest(BaseModel):
+        action: str
+        actor: str
+        role: str
+        authority_level: str = "INTERFACE"
+
+    @app.post("/api/interface/{resource_type}/{resource_id}/action")
+    def execute_interface_action(resource_type: str, resource_id: str, req: ActionRequest):
+        result, projection = system.execute_action(
+            resource_id, req.action, req.actor, req.role, req.authority_level,
+        )
+        if not result.success:
+            raise HTTPException(400, detail={
+                "step": result.rejected_step,
+                "reason": result.rejected_reason,
+            })
+        return {
+            "success": True,
+            "projection": projection.to_json() if projection else None,
+        }
+
     # --- Resource CRUD ---
 
     @app.post("/api/{resource_type}")
@@ -108,45 +148,5 @@ def create_app(system: ReconcileSystem) -> FastAPI:
     @app.get("/api/graph/{resource_id}/degree")
     def graph_degree(resource_id: str, edge_type: str | None = None):
         return {"degree": system.graph_degree(resource_id, edge_type)}
-
-    # --- Interface Projection ---
-
-    @app.get("/api/interface/{resource_type}/{resource_id}")
-    def get_projection(resource_type: str, resource_id: str, role: str):
-        try:
-            projection = system.project(resource_id, role)
-            return projection.to_json()
-        except Exception as e:
-            raise HTTPException(400, detail=str(e))
-
-    @app.get("/api/interface/{resource_type}")
-    def get_projections(resource_type: str, role: str):
-        projections = system.project_list(resource_type, role)
-        return [p.to_json() for p in projections]
-
-    class ActionRequest(BaseModel):
-        action: str
-        actor: str
-        role: str
-        authority_level: str = "INTERFACE"
-
-    @app.post("/api/interface/{resource_type}/{resource_id}/action")
-    def execute_interface_action(resource_type: str, resource_id: str, req: ActionRequest):
-        result, projection = system.execute_action(
-            resource_id, req.action, req.actor, req.role, req.authority_level,
-        )
-        if not result.success:
-            raise HTTPException(400, detail={
-                "step": result.rejected_step,
-                "reason": result.rejected_reason,
-            })
-        return {
-            "success": True,
-            "projection": projection.to_json() if projection else None,
-        }
-
-    @app.get("/api/spec")
-    def get_spec():
-        return system.export_spec()
 
     return app
