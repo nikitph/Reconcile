@@ -931,14 +931,14 @@ mod state_machine_edge_cases {
         let low = Resource {
             id: ResourceId::new(), resource_type: "test".into(), state: "DRAFT".into(),
             desired_state: None, data: serde_json::json!({"amount": 50}),
-            version: 1, created_at: Utc::now(), updated_at: Utc::now(),
+            version: 1, tenant_id: None, created_at: Utc::now(), updated_at: Utc::now(),
         };
         assert_eq!(sm.evaluate_guard("DRAFT", "SUBMITTED", &low).unwrap(), false);
 
         let high = Resource {
             id: ResourceId::new(), resource_type: "test".into(), state: "DRAFT".into(),
             desired_state: None, data: serde_json::json!({"amount": 200}),
-            version: 1, created_at: Utc::now(), updated_at: Utc::now(),
+            version: 1, tenant_id: None, created_at: Utc::now(), updated_at: Utc::now(),
         };
         assert_eq!(sm.evaluate_guard("DRAFT", "SUBMITTED", &high).unwrap(), true);
     }
@@ -1054,6 +1054,7 @@ mod policy_engine_edge_cases {
         Resource {
             id: ResourceId::new(), resource_type: rtype.into(), state: state.into(),
             desired_state: None, data, version: 1,
+            tenant_id: None,
             created_at: Utc::now(), updated_at: Utc::now(),
         }
     }

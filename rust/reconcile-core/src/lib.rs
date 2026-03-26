@@ -14,6 +14,11 @@ pub mod storage;
 pub mod schema_graph;
 pub mod instance_graph;
 pub mod temporal_graph;
+pub mod agent;
+pub mod decision;
+pub mod circuit_breaker;
+pub mod saga;
+pub mod workflow;
 pub mod transaction;
 
 #[cfg(test)]

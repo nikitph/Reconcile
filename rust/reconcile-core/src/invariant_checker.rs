@@ -203,6 +203,7 @@ mod tests {
             desired_state: None,
             data,
             version: 1,
+            tenant_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

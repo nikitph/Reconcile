@@ -426,6 +426,7 @@ mod tests {
             desired_state: None,
             data: serde_json::json!({}),
             version: 1,
+            tenant_id: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

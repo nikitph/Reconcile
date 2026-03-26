@@ -1,4 +1,7 @@
+use crate::agent::AgentScheduler;
+use crate::circuit_breaker::CircuitBreaker;
 use crate::controller_scheduler::ControllerScheduler;
+use crate::decision::DecisionNode;
 use crate::errors::KernelError;
 use crate::instance_graph::{AggFn, GraphEdge, GraphNode, InMemoryInstanceGraph, InstanceGraph};
 use crate::invariant_checker::{InvariantChecker, SystemQuery};
@@ -23,13 +26,16 @@ pub struct Kernel {
     pub invariant_checker: InvariantChecker,
     pub role_registry: RoleRegistry,
     pub controller_scheduler: ControllerScheduler,
+    pub agent_scheduler: AgentScheduler,
+    pub circuit_breaker: CircuitBreaker,
+    pub decision_nodes: Vec<DecisionNode>,
     pub schema_graph: SchemaGraph,
     pub instance_graph: Box<dyn InstanceGraph>,
     pub temporal_graph: Box<dyn TemporalGraph>,
-    /// Current cascade depth — tracked across recursive transition calls.
     cascade_depth: u32,
-    /// Create a snapshot every N transitions per resource (0 = disabled).
     pub snapshot_interval: u32,
+    /// Proposals collected during the current event processing cycle.
+    pending_proposals: Vec<Proposal>,
 }
 
 /// Read-only view of the kernel for invariant checks and controllers.
@@ -53,6 +59,7 @@ impl<'a> SystemQuery for KernelQuery<'a> {
             .map(|n| Resource {
                 id: n.id, resource_type: n.resource_type, state: n.state,
                 desired_state: None, data: n.data, version: n.version,
+                tenant_id: None,
                 created_at: Utc::now(), updated_at: Utc::now(),
             })
             .collect()
@@ -82,11 +89,15 @@ impl Kernel {
             invariant_checker: InvariantChecker::new(),
             role_registry: RoleRegistry::new(),
             controller_scheduler: ControllerScheduler::new(),
+            agent_scheduler: AgentScheduler::new(),
+            circuit_breaker: CircuitBreaker::default(),
+            decision_nodes: Vec::new(),
             schema_graph: SchemaGraph::new(),
             instance_graph: Box::new(InMemoryInstanceGraph::new()),
             temporal_graph: Box::new(InMemoryTemporalGraph::new()),
             cascade_depth: 0,
             snapshot_interval: 0,
+            pending_proposals: Vec::new(),
         }
     }
 
@@ -99,11 +110,15 @@ impl Kernel {
             invariant_checker: InvariantChecker::new(),
             role_registry: RoleRegistry::new(),
             controller_scheduler: ControllerScheduler::new(),
+            agent_scheduler: AgentScheduler::new(),
+            circuit_breaker: CircuitBreaker::default(),
+            decision_nodes: Vec::new(),
             schema_graph: SchemaGraph::new(),
             instance_graph: Box::new(InMemoryInstanceGraph::new()),
             temporal_graph: Box::new(InMemoryTemporalGraph::new()),
             cascade_depth: 0,
             snapshot_interval: 0,
+            pending_proposals: Vec::new(),
         }
     }
 
@@ -136,6 +151,7 @@ impl Kernel {
             desired_state: None,
             data,
             version: 1,
+            tenant_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -200,8 +216,12 @@ impl Kernel {
         // Run post-commit cascade.
         // Cascade errors should not invalidate resource creation.
         let cascade_events = self.run_cascade(&event).unwrap_or_default();
-        let mut all_events = vec![event];
+        let mut all_events = vec![event.clone()];
         all_events.extend(cascade_events);
+
+        // Run agents on creation event
+        self.run_agents(&event);
+        self.evaluate_decision_nodes(&id);
 
         let final_resource = self
             .storage
@@ -389,8 +409,14 @@ impl Kernel {
         // Post-commit: run cascade (outside transaction).
         // Cascade errors should not invalidate the committed transition.
         let cascade_events = self.run_cascade(&event).unwrap_or_default();
-        let mut all_events = vec![event];
+        let mut all_events = vec![event.clone()];
         all_events.extend(cascade_events);
+
+        // Post-commit: run agents (observe the event, collect proposals)
+        self.run_agents(&event);
+
+        // Post-commit: evaluate decision nodes against collected proposals
+        self.evaluate_decision_nodes(resource_id);
 
         let final_resource = self
             .storage
@@ -544,32 +570,55 @@ impl Kernel {
             });
         }
 
-        let matching = self.controller_scheduler.get_matching_controllers(trigger);
-        if matching.is_empty() {
+        // Collect matching controller info (names, indices) to avoid borrow conflicts
+        let matching_info: Vec<(String, u32, AuthorityLevel)> = self.controller_scheduler
+            .get_matching_controllers(trigger)
+            .iter()
+            .map(|ctrl| (ctrl.name.clone(), ctrl.priority, ctrl.authority_level))
+            .collect();
+
+        if matching_info.is_empty() {
             return Ok(vec![]);
         }
 
-        // Collect controller actions first (can't borrow self mutably while iterating)
-        let resource = self.storage.state_store().get(&trigger.resource_id);
-        let resource = match resource {
+        let resource = match self.storage.state_store().get(&trigger.resource_id) {
             Some(r) => r,
             None => return Ok(vec![]),
         };
 
-        let query = KernelQuery {
-            storage: self.storage.as_ref(),
-            instance_graph: self.instance_graph.as_ref(),
-        };
-
-        let actions: Vec<(String, ControllerAction, AuthorityLevel)> = matching
-            .iter()
-            .filter_map(|ctrl| {
-                ctrl.handler
-                    .reconcile(&resource, &query)
-                    .ok()
-                    .map(|action| (ctrl.name.clone(), action, ctrl.authority_level))
-            })
-            .collect();
+        // Collect actions — skip controllers with open circuits
+        let mut actions: Vec<(String, ControllerAction, AuthorityLevel)> = Vec::new();
+        for (ctrl_name, _, authority) in &matching_info {
+            if self.circuit_breaker.is_open(ctrl_name) {
+                continue;
+            }
+            let query = KernelQuery {
+                storage: self.storage.as_ref(),
+                instance_graph: self.instance_graph.as_ref(),
+            };
+            // Find the controller handler and call reconcile
+            let matching_ctrls = self.controller_scheduler.get_matching_controllers(trigger);
+            if let Some(ctrl) = matching_ctrls.iter().find(|c| c.name == *ctrl_name) {
+                match ctrl.handler.reconcile(&resource, &query) {
+                    Ok(action) => {
+                        self.circuit_breaker.record_success(ctrl_name);
+                        actions.push((ctrl_name.clone(), action, *authority));
+                    }
+                    Err(e) => {
+                        self.circuit_breaker.record_failure(ctrl_name);
+                        if self.circuit_breaker.is_open(ctrl_name) {
+                            self.circuit_breaker.add_dead_letter(DeadLetter {
+                                event: trigger.clone(),
+                                controller: ctrl_name.clone(),
+                                error: e.to_string(),
+                                attempts: self.circuit_breaker.get_failure_count(ctrl_name),
+                                timestamp: Utc::now(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         let mut all_events = Vec::new();
 
@@ -660,11 +709,12 @@ impl Kernel {
                 // Start from snapshot state
                 let mut resource = Resource {
                     id: resource_id.clone(),
-                    resource_type: String::new(), // Filled from first event or snapshot
+                    resource_type: String::new(),
                     state: snap.state,
                     desired_state: None,
                     data: snap.data,
                     version: snap.version,
+                    tenant_id: None,
                     created_at: snap.timestamp,
                     updated_at: snap.timestamp,
                 };
@@ -688,6 +738,104 @@ impl Kernel {
                 self.storage.state_store().get(resource_id)
             }
         }
+    }
+
+    // --- Agent dispatch ---
+
+    /// Run agents that match the event, collect proposals, log them.
+    fn run_agents(&mut self, event: &Event) {
+        let resource = match self.storage.state_store().get(&event.resource_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let query = KernelQuery {
+            storage: self.storage.as_ref(),
+            instance_graph: self.instance_graph.as_ref(),
+        };
+
+        let proposals = self.agent_scheduler.collect_proposals(event, &resource, &query);
+
+        // Log each proposal as an event
+        for proposal in &proposals {
+            let proposal_event = Event {
+                id: Uuid::new_v4(),
+                offset: 0,
+                event_type: "agent.proposal".into(),
+                resource_id: proposal.resource_id.clone(),
+                payload: serde_json::to_value(proposal).unwrap_or_default(),
+                actor: proposal.agent.clone(),
+                authority_level: AuthorityLevel::Agent,
+                timestamp: Utc::now(),
+            };
+            self.storage.event_log_mut().append(proposal_event);
+        }
+
+        self.pending_proposals.extend(proposals);
+    }
+
+    /// Evaluate decision nodes against pending proposals for a resource.
+    fn evaluate_decision_nodes(&mut self, resource_id: &ResourceId) {
+        let relevant: Vec<Proposal> = self.pending_proposals
+            .iter()
+            .filter(|p| &p.resource_id == resource_id)
+            .cloned()
+            .collect();
+
+        if relevant.is_empty() {
+            return;
+        }
+
+        for node in &self.decision_nodes.clone() {
+            let outcome = node.evaluate(&relevant);
+            match outcome {
+                crate::decision::DecisionOutcome::AutoAccept { action, confidence } => {
+                    // Execute the accepted action as AuthorityLevel::Agent
+                    match action {
+                        ProposedAction::Transition { to_state } => {
+                            let _ = self.transition(
+                                resource_id, &to_state,
+                                &node.name, "agent", AuthorityLevel::Agent,
+                            );
+                        }
+                        ProposedAction::SetDesiredState { state } => {
+                            let _ = self.set_desired_state(
+                                resource_id, &state, &node.name, AuthorityLevel::Agent,
+                            );
+                        }
+                        ProposedAction::Flag { reason } => {
+                            // Log flag event
+                            let flag_event = Event {
+                                id: Uuid::new_v4(),
+                                offset: 0,
+                                event_type: "agent.flag".into(),
+                                resource_id: resource_id.clone(),
+                                payload: serde_json::json!({
+                                    "reason": reason,
+                                    "decision_node": node.name,
+                                    "confidence": confidence,
+                                }),
+                                actor: node.name.clone(),
+                                authority_level: AuthorityLevel::Agent,
+                                timestamp: Utc::now(),
+                            };
+                            self.storage.event_log_mut().append(flag_event);
+                        }
+                    }
+                }
+                _ => {
+                    // NeedsReview, AutoReject, NoProposals — log but don't act
+                }
+            }
+        }
+
+        // Clear processed proposals for this resource
+        self.pending_proposals.retain(|p| &p.resource_id != resource_id);
+    }
+
+    /// Get pending proposals (for inspection/testing).
+    pub fn pending_proposals(&self) -> &[Proposal] {
+        &self.pending_proposals
     }
 }
 

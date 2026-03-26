@@ -75,6 +75,7 @@ pub struct Resource {
     pub desired_state: Option<String>,
     pub data: serde_json::Value,
     pub version: u64,
+    pub tenant_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -242,4 +243,39 @@ pub enum ControllerAction {
     NoOp,
     Transition { to_state: String },
     SetDesiredState { state: String },
+}
+
+// ---------------------------------------------------------------------------
+// Agent proposals
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProposedAction {
+    Transition { to_state: String },
+    SetDesiredState { state: String },
+    Flag { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Proposal {
+    pub id: Uuid,
+    pub agent: String,
+    pub action: ProposedAction,
+    pub resource_id: ResourceId,
+    pub confidence: f64,
+    pub reasoning: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// Dead letter
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct DeadLetter {
+    pub event: Event,
+    pub controller: String,
+    pub error: String,
+    pub attempts: u32,
+    pub timestamp: DateTime<Utc>,
 }

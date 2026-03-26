@@ -42,6 +42,7 @@ impl PostgresBackend {
             desired_state: row.get("desired_state"),
             data: row.get("data"),
             version: row.get::<_, i32>("version") as u64,
+            tenant_id: None, // TODO: read from DB when V2 migration adds column
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }

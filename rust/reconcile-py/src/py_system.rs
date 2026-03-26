@@ -516,6 +516,7 @@ impl PyReconcileSystem {
             inner: Resource {
                 id: n.id, resource_type: n.resource_type, state: n.state,
                 desired_state: None, data: n.data, version: n.version,
+                tenant_id: None,
                 created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(),
             }
         }).collect())
@@ -540,6 +541,124 @@ impl PyReconcileSystem {
     fn graph_degree(&self, resource_id: String, edge_type: Option<String>) -> PyResult<usize> {
         let rid = parse_resource_id(&resource_id)?;
         Ok(self.kernel.instance_graph.degree(&rid, edge_type.as_deref()))
+    }
+
+    // --- Agents ---
+
+    /// Register an agent with a Python callable handler.
+    #[pyo3(signature = (name, handler, on_events=vec![], priority=50))]
+    fn register_agent(
+        &mut self,
+        name: String,
+        handler: PyObject,
+        on_events: Vec<String>,
+        priority: u32,
+    ) -> PyResult<()> {
+        use reconcile_core::agent::{AgentRegistration, AgentHandler};
+        use reconcile_core::event_log::EventPattern;
+
+        struct PyAgentBridge { callable: PyObject }
+        unsafe impl Send for PyAgentBridge {}
+        unsafe impl Sync for PyAgentBridge {}
+
+        impl AgentHandler for PyAgentBridge {
+            fn observe(&self, resource: &Resource, query: &dyn SystemQuery) -> Option<Proposal> {
+                Python::with_gil(|py| {
+                    let py_resource = PyResource { inner: resource.clone() };
+                    let py_query = PyQueryContext::new(query);
+
+                    match self.callable.call1(py, (py_resource, py_query)) {
+                        Ok(result) => {
+                            if result.is_none(py) {
+                                return None;
+                            }
+                            // Expect a dict with: action, confidence, reasoning
+                            if let Ok(dict) = result.downcast_bound::<pyo3::types::PyDict>(py) {
+                                let confidence = dict.get_item("confidence").ok()
+                                    .flatten()
+                                    .and_then(|v| v.extract::<f64>().ok())
+                                    .unwrap_or(0.5);
+                                let reasoning = dict.get_item("reasoning").ok()
+                                    .flatten()
+                                    .and_then(|v| v.extract::<String>().ok())
+                                    .unwrap_or_default();
+
+                                let action = if let Ok(Some(t)) = dict.get_item("transition") {
+                                    if let Ok(s) = t.extract::<String>() {
+                                        ProposedAction::Transition { to_state: s }
+                                    } else {
+                                        return None;
+                                    }
+                                } else if let Ok(Some(f)) = dict.get_item("flag") {
+                                    if let Ok(s) = f.extract::<String>() {
+                                        ProposedAction::Flag { reason: s }
+                                    } else {
+                                        return None;
+                                    }
+                                } else {
+                                    return None;
+                                };
+
+                                Some(Proposal {
+                                    id: uuid::Uuid::new_v4(),
+                                    agent: String::new(), // Filled by scheduler
+                                    action,
+                                    resource_id: resource.id.clone(),
+                                    confidence,
+                                    reasoning,
+                                    timestamp: chrono::Utc::now(),
+                                })
+                            } else {
+                                None
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                })
+            }
+        }
+
+        let patterns: Vec<EventPattern> = on_events.iter().map(|e| EventPattern::parse(e)).collect();
+
+        self.kernel.agent_scheduler.register(AgentRegistration {
+            name,
+            priority,
+            on_events: patterns,
+            handler: Box::new(PyAgentBridge { callable: handler }),
+        });
+        Ok(())
+    }
+
+    // --- Decision Nodes ---
+
+    /// Register a decision node.
+    #[pyo3(signature = (name, agents, aggregation="weighted_avg".to_string(), auto_accept=0.9, auto_reject=0.5))]
+    fn register_decision_node(
+        &mut self,
+        name: String,
+        agents: Vec<String>,
+        aggregation: String,
+        auto_accept: f64,
+        auto_reject: f64,
+    ) -> PyResult<()> {
+        use reconcile_core::decision::{AggregationStrategy, DecisionNode};
+
+        let strategy = match aggregation.as_str() {
+            "majority" => AggregationStrategy::Majority,
+            "weighted_avg" => AggregationStrategy::WeightedAvg,
+            "unanimous" => AggregationStrategy::Unanimous,
+            "min_confidence" => AggregationStrategy::MinConfidence,
+            _ => return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Invalid aggregation: {}. Use majority, weighted_avg, unanimous, min_confidence", aggregation)
+            )),
+        };
+
+        let mut node = DecisionNode::new(name, agents);
+        node.aggregation = strategy;
+        node.auto_accept_threshold = auto_accept;
+        node.auto_reject_threshold = auto_reject;
+        self.kernel.decision_nodes.push(node);
+        Ok(())
     }
 }
 

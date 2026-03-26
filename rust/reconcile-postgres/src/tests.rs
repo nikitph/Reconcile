@@ -52,6 +52,7 @@ mod pg_tests {
             desired_state: None,
             data: serde_json::json!({"amount": 500_000, "applicant": "Acme"}),
             version: 1,
+            tenant_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -92,6 +93,7 @@ mod pg_tests {
             desired_state: None,
             data: serde_json::json!({"amount": 100}),
             version: 1,
+            tenant_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }).unwrap();
@@ -123,6 +125,7 @@ mod pg_tests {
             desired_state: None,
             data: serde_json::json!({}),
             version: 1,
+            tenant_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }).unwrap();
@@ -156,6 +159,7 @@ mod pg_tests {
                 desired_state: None,
                 data: serde_json::json!({}),
                 version: 1,
+                tenant_id: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             }).unwrap();
@@ -167,6 +171,7 @@ mod pg_tests {
             desired_state: None,
             data: serde_json::json!({}),
             version: 1,
+            tenant_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }).unwrap();
