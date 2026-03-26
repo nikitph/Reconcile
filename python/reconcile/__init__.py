@@ -13,6 +13,7 @@ from reconcile._native import (
 )
 from reconcile.dsl import define_system
 from reconcile.controller import Controller
+from reconcile.llm import GovernedLLM, build_system_prompt, GOVERNED_TOOLS
 
 __all__ = [
     "__version__",
