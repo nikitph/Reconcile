@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "rust/reconcile-core",
+    "rust/reconcile-py",
+    "rust/reconcile-postgres",
+]
+resolver = "2"
