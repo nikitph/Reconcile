@@ -14,6 +14,9 @@ def define_system(
     policies: list[dict] | None = None,
     invariants: list[dict] | None = None,
     controllers: list | None = None,
+    relationships: list[dict] | None = None,
+    agents: list[dict] | None = None,
+    decision_nodes: list[dict] | None = None,
     database_url: str | None = None,
     snapshot_interval: int = 0,
 ) -> "SystemWrapper":
@@ -29,6 +32,9 @@ def define_system(
         policies: List of policy dicts with keys: name, description, evaluate, applicable_states, resource_types, priority
         invariants: List of invariant dicts with keys: name, description, mode, scope, check, resource_types
         controllers: List of Controller instances or dicts
+        relationships: List of relationship dicts with keys: to_type, relation, cardinality, required, foreign_key
+        agents: List of agent dicts with keys: name, observe, on_events, priority
+        decision_nodes: List of decision node dicts with keys: name, agents, aggregation, auto_accept, auto_reject
         database_url: PostgreSQL connection string (None = in-memory)
         snapshot_interval: Create snapshot every N transitions (0 = disabled)
 
@@ -89,6 +95,33 @@ def define_system(
                 authority_level=ctrl.authority_level,
             )
 
+    for relationship in relationships or []:
+        system.register_relationship(
+            name,
+            relationship["to_type"],
+            relationship["relation"],
+            relationship.get("cardinality", "many_to_one"),
+            relationship.get("required", False),
+            relationship.get("foreign_key", ""),
+        )
+
+    for agent in agents or []:
+        system.register_agent(
+            agent["name"],
+            agent["observe"],
+            agent.get("on_events", []),
+            agent.get("priority", 50),
+        )
+
+    for node in decision_nodes or []:
+        system.register_decision_node(
+            node["name"],
+            node["agents"],
+            node.get("aggregation", "weighted_avg"),
+            node.get("auto_accept", 0.9),
+            node.get("auto_reject", 0.5),
+        )
+
     return SystemWrapper(system, name)
 
 
@@ -104,9 +137,27 @@ class SystemWrapper:
         """Access the underlying native system."""
         return self._system
 
+    def register_type(self, name: str, states: list[str], transitions: list[tuple[str, str]],
+                      initial_state: str | None = None, terminal_states: list[str] | None = None):
+        """Register an additional resource type on the underlying system."""
+        init = initial_state or states[0]
+        terms = terminal_states or []
+        self._system.register_type(name, states, transitions, init, terms)
+        return self
+
+    def register_role(self, name: str, permissions: list[str]):
+        """Register an additional role on the underlying system."""
+        self._system.register_role(name, permissions)
+        return self
+
     def create(self, data: dict, *, actor: str = "system", authority_level: str = "HUMAN"):
         """Create a new resource."""
         return self._system.create(self._resource_type, data, actor, authority_level)
+
+    def create_resource(self, resource_type: str, data: dict, *, actor: str = "system",
+                        authority_level: str = "HUMAN"):
+        """Create a resource of any registered type."""
+        return self._system.create(resource_type, data, actor, authority_level)
 
     def transition(self, resource_id: str, to_state: str, *, actor: str = "system",
                    role: str = "system", authority_level: str = "HUMAN"):
@@ -134,6 +185,10 @@ class SystemWrapper:
         """List all resources of this type."""
         return self._system.list_resources(self._resource_type)
 
+    def list_resources_of(self, resource_type: str):
+        """List all resources of a registered type."""
+        return self._system.list_resources(resource_type)
+
     # --- Graph methods ---
 
     def register_relationship(self, to_type: str, relation: str, *,
@@ -145,6 +200,23 @@ class SystemWrapper:
             self._resource_type, to_type, relation,
             cardinality, required, foreign_key,
         )
+        return self
+
+    def register_agent(self, name: str, observe, *, on_events: list[str] | None = None,
+                       priority: int = 50):
+        """Register an agent on the underlying system."""
+        self._system.register_agent(name, observe, on_events or [], priority)
+        return self
+
+    def register_decision_node(self, name: str, agents: list[str], *,
+                               aggregation: str = "weighted_avg",
+                               auto_accept: float = 0.9,
+                               auto_reject: float = 0.5):
+        """Register a decision node on the underlying system."""
+        self._system.register_decision_node(
+            name, agents, aggregation, auto_accept, auto_reject,
+        )
+        return self
 
     def graph_neighbors(self, resource_id: str, edge_type: str | None = None):
         """Get neighbor resources via graph edges."""

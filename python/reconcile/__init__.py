@@ -28,4 +28,8 @@ __all__ = [
     "AuthorityLevel",
     "define_system",
     "Controller",
+    "GovernedLLM",
+    "build_system_prompt",
+    "GOVERNED_TOOLS",
+    "ReconcilePlatform",
 ]

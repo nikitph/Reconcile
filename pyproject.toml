@@ -5,11 +5,22 @@ build-backend = "maturin"
 [project]
 name = "reconcile"
 version = "0.1.0"
+description = "Governance runtime for enterprise workflows, policies, and state transitions."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+api = ["fastapi", "pydantic"]
+dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
