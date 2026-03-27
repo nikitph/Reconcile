@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import Any
 from reconcile._native import ReconcileSystem
+from reconcile.subscriptions import SubscriptionManager
 
 
 class TransitionRequest(BaseModel):
@@ -28,6 +29,11 @@ class DesiredStateRequest(BaseModel):
 def create_app(system: ReconcileSystem) -> FastAPI:
     """Create a FastAPI app wrapping a ReconcileSystem."""
     app = FastAPI(title="Reconcile API", version="0.1.0")
+    subs = SubscriptionManager()
+
+    async def _notify(resource_id: str):
+        """Push updated projections to all subscribers of this resource."""
+        await subs.broadcast(resource_id, system)
 
     @app.get("/api/spec")
     def get_spec():
@@ -55,7 +61,7 @@ def create_app(system: ReconcileSystem) -> FastAPI:
         authority_level: str = "INTERFACE"
 
     @app.post("/api/interface/{resource_type}/{resource_id}/action")
-    def execute_interface_action(resource_type: str, resource_id: str, req: ActionRequest):
+    async def execute_interface_action(resource_type: str, resource_id: str, req: ActionRequest):
         result, projection = system.execute_action(
             resource_id, req.action, req.actor, req.role, req.authority_level,
         )
@@ -64,6 +70,7 @@ def create_app(system: ReconcileSystem) -> FastAPI:
                 "step": result.rejected_step,
                 "reason": result.rejected_reason,
             })
+        await _notify(resource_id)
         return {
             "success": True,
             "projection": projection.to_json() if projection else None,
@@ -72,7 +79,7 @@ def create_app(system: ReconcileSystem) -> FastAPI:
     # --- Resource CRUD ---
 
     @app.post("/api/{resource_type}")
-    def create_resource(resource_type: str, req: CreateRequest):
+    async def create_resource(resource_type: str, req: CreateRequest):
         result = system.create(resource_type, req.data, req.actor, req.authority_level)
         if not result.success:
             raise HTTPException(400, detail={
@@ -80,6 +87,7 @@ def create_app(system: ReconcileSystem) -> FastAPI:
                 "reason": result.rejected_reason,
             })
         r = result.resource
+        await _notify(r.id)
         return {"id": r.id, "state": r.state, "version": r.version, "data": r.data}
 
     @app.get("/api/{resource_type}/{resource_id}")
@@ -96,7 +104,7 @@ def create_app(system: ReconcileSystem) -> FastAPI:
         return [{"id": r.id, "state": r.state, "version": r.version} for r in resources]
 
     @app.post("/api/{resource_type}/{resource_id}/transition")
-    def transition(resource_type: str, resource_id: str, req: TransitionRequest):
+    async def transition(resource_type: str, resource_id: str, req: TransitionRequest):
         result = system.transition(resource_id, req.to_state, req.actor, req.role, req.authority_level)
         if not result.success:
             raise HTTPException(400, detail={
@@ -104,15 +112,17 @@ def create_app(system: ReconcileSystem) -> FastAPI:
                 "reason": result.rejected_reason,
             })
         r = result.resource
+        await _notify(resource_id)
         return {"id": r.id, "state": r.state, "version": r.version}
 
     @app.post("/api/{resource_type}/{resource_id}/desired")
-    def set_desired(resource_type: str, resource_id: str, req: DesiredStateRequest):
+    async def set_desired(resource_type: str, resource_id: str, req: DesiredStateRequest):
         try:
             system.set_desired(resource_id, req.desired_state, req.requested_by, req.authority_level)
         except Exception as e:
             raise HTTPException(400, detail=str(e))
         r = system.get(resource_id)
+        await _notify(resource_id)
         return {"id": r.id, "state": r.state, "desired_state": r.desired_state}
 
     # --- Events + Audit ---
@@ -148,5 +158,42 @@ def create_app(system: ReconcileSystem) -> FastAPI:
     @app.get("/api/graph/{resource_id}/degree")
     def graph_degree(resource_id: str, edge_type: str | None = None):
         return {"degree": system.graph_degree(resource_id, edge_type)}
+
+    # --- WebSocket: real-time projection subscriptions ---
+
+    @app.websocket("/ws/interface/{resource_type}/{resource_id}")
+    async def ws_projection(websocket: WebSocket, resource_type: str, resource_id: str):
+        """Subscribe to real-time projection updates for a resource.
+
+        Client sends: {"role": "officer"} on connect.
+        Server pushes: InterfaceProjection JSON on every state change.
+        """
+        await websocket.accept()
+
+        try:
+            # First message must specify role
+            init = await websocket.receive_json()
+            role = init.get("role", "viewer")
+
+            await subs.subscribe(websocket, resource_id, role)
+
+            # Send initial projection immediately
+            try:
+                projection = system.project(resource_id, role)
+                await websocket.send_json(projection.to_json())
+            except Exception as e:
+                await websocket.send_json({"error": str(e)})
+
+            # Keep connection alive, listen for client messages
+            while True:
+                msg = await websocket.receive_text()
+                # Client can send "ping" to keep alive
+                if msg == "ping":
+                    await websocket.send_text("pong")
+
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await subs.unsubscribe(websocket)
 
     return app
