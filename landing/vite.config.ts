@@ -4,4 +4,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/reconcile/',
+  build: {
+    outDir: '../docs',
+    emptyOutDir: false, // Don't wipe existing PDFs
+  }
 })
