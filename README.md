@@ -14,6 +14,9 @@ single kernel that enforces:
 - controller automation
 - agent recommendations
 
+Detailed theory can be found here - [view.pdf](https://github.com/user-attachments/files/26300601/view.pdf)
+
+
 It ships as a Python package backed by a Rust core.
 
 ## Install
