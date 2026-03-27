@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API = '';
-const ROLES = ['data_entry', 'kyc_officer', 'document_officer', 'underwriter', 'senior_underwriter', 'branch_manager', 'collections', 'customer'];
 
 interface Projection {
   resource: {
@@ -17,22 +16,17 @@ interface Projection {
   audit_summary: { actor: string; from_state: string; to_state: string; authority_level: string; timestamp: string }[];
 }
 
-// The lifecycle steps with the role that performs each
-const LIFECYCLE_STEPS: [string, string, string][] = [
-  ['APPLIED', 'data_entry', 'data_entry-1'],
-  ['KYC_REVIEW', 'kyc_officer', 'kyc-1'],
-  ['DOCUMENT_VERIFICATION', 'kyc_officer', 'kyc-1'],
-  ['CREDIT_BUREAU_CHECK', 'document_officer', 'doc-1'],
-  ['UNDERWRITING', 'document_officer', 'doc-1'],
-  // Agent auto-approves here if amount < 1M
-  ['DISBURSED', 'branch_manager', 'bm-1'],
-  ['REPAYING', 'branch_manager', 'bm-1'],
-  ['CLOSED', 'branch_manager', 'bm-1'],
-];
+interface Spec {
+  types: { name: string; states: string[]; transitions: { from: string; to: string }[] }[];
+  policy_count: number; invariant_count: number; agent_count: number; decision_node_count: number;
+}
 
 function App() {
-  const [role, setRole] = useState('data_entry');
-  const [loans, setLoans] = useState<any[]>([]);
+  const [spec, setSpec] = useState<Spec | null>(null);
+  const [resourceType, setResourceType] = useState('');
+  const [role, setRole] = useState('');
+  const [roles, setRoles] = useState<string[]>([]);
+  const [items, setItems] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [running, setRunning] = useState(false);
@@ -41,101 +35,180 @@ function App() {
   const refresh = () => setTick(t => t + 1);
   const addLog = (msg: string) => setLog(prev => [...prev, msg]);
 
+  // Load spec on mount
   useEffect(() => {
-    fetch(`${API}/api/loan`).then(r => r.json()).then(setLoans).catch(() => {});
-  }, [tick]);
+    fetch(`${API}/api/spec`).then(r => r.json()).then((s: Spec) => {
+      setSpec(s);
+      if (s.types.length > 0) setResourceType(s.types[0].name);
+    }).catch(() => {});
+  }, []);
+
+  // Discover roles from projection attempts
+  useEffect(() => {
+    if (!resourceType) return;
+    // Try common role names to discover what's registered
+    const tryRoles = [
+      'applicant', 'intake_clerk', 'zoning_officer', 'env_officer',
+      'structural_engineer', 'fire_marshal', 'building_inspector', 'planning_director',
+      'data_entry', 'kyc_officer', 'document_officer', 'underwriter',
+      'senior_underwriter', 'branch_manager', 'collections', 'customer',
+      'maker', 'checker', 'approver', 'manager', 'auditor', 'viewer',
+      'buyer', 'finance', 'admin',
+    ];
+    setRoles(tryRoles);
+    if (!role) setRole(tryRoles[0]);
+  }, [resourceType]);
+
+  // Load items
+  useEffect(() => {
+    if (!resourceType) return;
+    fetch(`${API}/api/${resourceType}`).then(r => r.json()).then(setItems).catch(() => setItems([]));
+  }, [resourceType, tick]);
 
   const runLifecycle = async () => {
+    if (!spec || !resourceType) return;
     setRunning(true);
     setLog([]);
-    addLog('Creating applicant...');
 
-    // Create applicant
-    const appRes = await fetch(`${API}/api/applicant`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: { name: 'Demo Corp Pvt Ltd' }, actor: 'system', authority_level: 'SYSTEM' }),
-    });
-    const app = await appRes.json();
-    addLog(`✓ Applicant: ${app.id?.slice(0, 8)}`);
+    const typeSpec = spec.types.find(t => t.name === resourceType);
+    if (!typeSpec) { setRunning(false); return; }
 
-    // Create loan
-    const loanRes = await fetch(`${API}/api/loan`, {
+    addLog(`System: ${typeSpec.states.length} states, ${typeSpec.transitions.length} transitions, ${spec.policy_count} policies`);
+
+    // Create supporting resources if needed
+    const otherTypes = spec.types.filter(t => t.name !== resourceType);
+    const supportIds: Record<string, string> = {};
+    for (const t of otherTypes) {
+      const res = await fetch(`${API}/api/${t.name}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { name: `Demo ${t.name}` }, actor: 'system', authority_level: 'SYSTEM' }),
+      });
+      const d = await res.json();
+      if (d.id) { supportIds[t.name] = d.id; addLog(`✓ Created ${t.name}: ${d.id.slice(0, 8)}`); }
+    }
+
+    // Create main resource with data that satisfies policies
+    const createData: Record<string, any> = {
+      project_name: 'Demo Project', project_type: 'single_family',
+      estimated_cost: 500000, zone: 'residential', stories: 2,
+      building_height_ft: 28, lot_size_sqft: 8000, lot_coverage_pct: 40,
+      building_sqft: 3200, foundation_type: 'standard', fire_exits: 2,
+      smoke_detectors: true, total_parking: 4, ada_parking: 0,
+      setback_front: 30, setback_rear: 25, setback_side_left: 15, setback_side_right: 15,
+      fee_paid: true, inspection_fee_paid: true,
+      neighbors_notified: true, liability_insurance: true,
+      utility_clearance: true, erosion_control_plan: true,
+      boundary_survey: true, soil_test_report: true,
+      as_built_drawings: true, max_occupancy_posted: true,
+      sprinkler_system: true, fire_lane: true, fire_rated_walls: false,
+      ada_entrance: true, ada_restroom: true,
+      // For loan system
+      amount: 800000, purpose: 'working_capital', tenure: 24, interest_rate: 12.5,
+    };
+    // Add foreign keys
+    for (const [tname, tid] of Object.entries(supportIds)) {
+      createData[`${tname}_id`] = tid;
+    }
+
+    const createRes = await fetch(`${API}/api/${resourceType}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: { amount: 800000, purpose: 'working_capital', tenure: 24, interest_rate: 12.5, applicant_id: app.id },
-        actor: 'system', authority_level: 'SYSTEM',
-      }),
+      body: JSON.stringify({ data: createData, actor: 'system', authority_level: 'SYSTEM' }),
     });
-    const loan = await loanRes.json();
-    const lid = loan.id;
-    setSelected(lid);
-    setRole('data_entry');
+    const created = await createRes.json();
+    if (!created.id) { addLog(`✗ Create failed: ${JSON.stringify(created)}`); setRunning(false); return; }
+    const rid = created.id;
+    setSelected(rid);
+    addLog(`✓ Created ${resourceType}: ${rid.slice(0, 8)} (${created.state})`);
     refresh();
-    addLog(`✓ Loan created: ₹8,00,000 (${lid?.slice(0, 8)})`);
-    await delay(800);
+    await delay(500);
 
-    // Walk through lifecycle
-    for (const [targetState, stepRole, actor] of LIFECYCLE_STEPS) {
-      setRole(stepRole);
-      await delay(400);
+    // Walk through transitions greedily
+    const visited = new Set<string>();
+    let steps = 0;
+    const maxSteps = 30;
 
-      // Check if already past this state (agent may have auto-approved)
-      const checkRes = await fetch(`${API}/api/loan/${lid}`);
+    while (steps < maxSteps) {
+      const checkRes = await fetch(`${API}/api/${resourceType}/${rid}`);
       const current = await checkRes.json();
 
-      // If the resource is already at or past the target, skip
-      if (current.state === targetState || current.state === 'APPROVED' || current.state === 'CLOSED') {
-        if (current.state === 'APPROVED' && targetState !== 'DISBURSED' && targetState !== 'REPAYING' && targetState !== 'CLOSED') {
-          addLog(`⚡ Agent auto-approved! Skipping ${targetState}`);
-          continue;
-        }
-        if (current.state === 'CLOSED') {
-          addLog(`✓ Already CLOSED`);
-          break;
-        }
+      if (visited.has(current.state) && current.state !== typeSpec.states[0]) {
+        addLog(`↩ Already visited ${current.state}, stopping`);
+        break;
       }
+      visited.add(current.state);
 
-      addLog(`→ ${stepRole}: transitioning to ${targetState}...`);
+      // Try each role to find one that has valid actions
+      let acted = false;
+      for (const tryRole of roles) {
+        let projRes;
+        try {
+          projRes = await fetch(`${API}/api/interface/${resourceType}/${rid}?role=${tryRole}`);
+          if (!projRes.ok) continue;
+        } catch { continue; }
+        const proj = await projRes.json();
+        if (!proj.valid_actions || proj.valid_actions.length === 0) continue;
 
-      const res = await fetch(`${API}/api/interface/loan/${lid}/action`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: targetState, actor, role: stepRole, authority_level: 'HUMAN' }),
-      });
-      const result = await res.json();
+        // Pick first valid action that moves forward (not back to DRAFT/start)
+        const action = proj.valid_actions.find((a: any) =>
+          !visited.has(a.action) || a.action === typeSpec.states[typeSpec.states.length - 1]
+        ) || proj.valid_actions[0];
 
-      if (res.ok && result.projection) {
-        const newState = result.projection.resource.state;
-        addLog(`✓ ${newState} (v${result.projection.resource.version})`);
+        setRole(tryRole);
+        addLog(`→ ${tryRole}: ${current.state} → ${action.action}`);
 
-        // Check if agent auto-approved during this transition
-        if (newState === 'APPROVED' && targetState === 'UNDERWRITING') {
-          addLog(`⚡ Decision node auto-approved!`);
-          // Show agent proposals if any
-          if (result.projection.proposals?.length > 0) {
-            for (const p of result.projection.proposals) {
+        const actRes = await fetch(`${API}/api/interface/${resourceType}/${rid}/action`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action.action, actor: `${tryRole}-1`, role: tryRole, authority_level: 'HUMAN' }),
+        });
+        const actData = await actRes.json();
+
+        if (actRes.ok && actData.projection) {
+          const newState = actData.projection.resource.state;
+          addLog(`  ✓ ${newState} (v${actData.projection.resource.version})`);
+
+          if (actData.projection.proposals?.length > 0) {
+            for (const p of actData.projection.proposals) {
               addLog(`  🤖 ${p.agent}: ${(p.confidence * 100).toFixed(0)}% — ${p.reasoning}`);
             }
           }
+
+          if (actData.projection.resource.is_terminal) {
+            addLog(`\n🏁 Terminal state: ${newState}`);
+            acted = true;
+            break;
+          }
+        } else {
+          addLog(`  ✗ ${actData.detail?.reason || JSON.stringify(actData.detail)}`);
+          continue;
         }
-      } else {
-        addLog(`✗ Blocked: ${result.detail?.reason || JSON.stringify(result.detail)}`);
-        // Try to continue anyway
+
+        refresh();
+        await delay(700);
+        acted = true;
+        break;
       }
 
-      refresh();
-      await delay(1000);
+      if (!acted) {
+        addLog(`⏸ No role can act from ${current.state}`);
+        break;
+      }
+
+      steps++;
+
+      // Check if we reached terminal
+      const finalCheck = await fetch(`${API}/api/${resourceType}/${rid}`);
+      const finalState = await finalCheck.json();
+      if (typeSpec.transitions.filter(t => t.from === finalState.state).length === 0) {
+        addLog(`\n🏁 No outbound transitions from ${finalState.state}`);
+        break;
+      }
     }
 
-    // Final state
-    const finalRes = await fetch(`${API}/api/loan/${lid}`);
-    const final = await finalRes.json();
-    addLog(`\n✅ Final state: ${final.state} (version ${final.version})`);
-
-    // Show audit trail
-    const auditRes = await fetch(`${API}/api/loan/${lid}/audit`);
+    // Final summary
+    const auditRes = await fetch(`${API}/api/${resourceType}/${rid}/audit`);
     const audit = await auditRes.json();
-    addLog(`📋 Audit trail: ${audit.length} records`);
-    for (const a of audit) {
+    addLog(`\n📋 ${audit.length} audit records:`);
+    for (const a of audit.slice(-10)) {
       addLog(`  ${a.previous_state} → ${a.new_state} by ${a.actor} (${a.authority_level})`);
     }
 
@@ -143,44 +216,49 @@ function App() {
     refresh();
   };
 
+  if (!spec) return <div className="loading">Loading system spec...</div>;
+
   return (
     <div className="app">
       <header className="header">
         <h1>Reconcile</h1>
-        <span className="subtitle">Loan Operating System</span>
+        <span className="subtitle">
+          {spec.types.map(t => t.name).join(' + ')} — {spec.policy_count} policies
+        </span>
         <div className="role-picker">
-          <label>Role:</label>
+          <select value={resourceType} onChange={e => { setResourceType(e.target.value); setSelected(null); }}>
+            {spec.types.map(t => <option key={t.name}>{t.name}</option>)}
+          </select>
           <select value={role} onChange={e => setRole(e.target.value)}>
-            {ROLES.map(r => <option key={r}>{r}</option>)}
+            {roles.map(r => <option key={r}>{r}</option>)}
           </select>
         </div>
         <button className="btn-lifecycle" onClick={runLifecycle} disabled={running}>
-          {running ? '⏳ Running...' : '▶ Run Full Lifecycle'}
+          {running ? '⏳ Running...' : '▶ Run Lifecycle'}
         </button>
       </header>
 
       <div className="layout">
         <aside className="sidebar">
-          <CreateLoan onCreated={(id) => { setSelected(id); refresh(); }} />
-          <h3>Loans ({loans.length})</h3>
+          <h3>{resourceType} ({items.length})</h3>
           <ul className="loan-list">
-            {loans.map((l: any) => (
+            {items.map((l: any) => (
               <li key={l.id}
                   className={`loan-item ${selected === l.id ? 'active' : ''}`}
                   onClick={() => setSelected(l.id)}>
-                <span className={`dot state-${l.state.toLowerCase()}`} />
+                <span className={`dot dot-auto`} style={{background: stateColor(l.state)}} />
                 <span className="loan-id">{l.id.slice(0, 8)}</span>
                 <span className="loan-state">{l.state}</span>
               </li>
             ))}
           </ul>
 
-          {/* Activity log */}
           {log.length > 0 && (
             <div className="log-section">
               <h3>Activity</h3>
               <div className="log">
                 {log.map((msg, i) => <div key={i} className="log-entry">{msg}</div>)}
+                <div ref={el => el?.scrollIntoView()} />
               </div>
             </div>
           )}
@@ -188,8 +266,11 @@ function App() {
 
         <main className="main">
           {selected
-            ? <ProjectionView resourceId={selected} role={role} onAction={refresh} />
-            : <div className="empty">Select a loan or click "Run Full Lifecycle"</div>
+            ? <ProjectionView resourceId={selected} resourceType={resourceType} role={role} onAction={refresh} />
+            : <div className="empty">
+                <p>Click "Run Lifecycle" to see the full flow</p>
+                <p className="muted">{spec.types.length} types, {spec.policy_count} policies, {spec.invariant_count} invariants, {spec.agent_count} agents</p>
+              </div>
           }
         </main>
       </div>
@@ -197,55 +278,46 @@ function App() {
   );
 }
 
-function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
-
-function CreateLoan({ onCreated }: { onCreated: (id: string) => void }) {
-  const [amount, setAmount] = useState('500000');
-  const create = async () => {
-    const res = await fetch(`${API}/api/loan`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: { amount: Number(amount), purpose: 'working_capital' }, actor: 'ui', authority_level: 'SYSTEM' }),
-    });
-    const data = await res.json();
-    if (data.id) onCreated(data.id);
-  };
-  return (
-    <div className="create-box">
-      <input type="number" value={amount} onChange={e => setAmount(e.target.value)} />
-      <button onClick={create}>+ New Loan</button>
-    </div>
-  );
+function stateColor(state: string): string {
+  const s = state.toLowerCase();
+  if (s.includes('draft') || s.includes('pending')) return '#6b7280';
+  if (s.includes('review') || s.includes('inspection')) return '#eab308';
+  if (s.includes('approved') || s.includes('granted') || s.includes('closed')) return '#22c55e';
+  if (s.includes('rejected') || s.includes('revoked') || s.includes('npa')) return '#ef4444';
+  if (s.includes('construction') || s.includes('disbursed') || s.includes('repaying')) return '#6366f1';
+  return '#3b82f6';
 }
 
-function ProjectionView({ resourceId, role, onAction }: {
-  resourceId: string; role: string; onAction: () => void;
+function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+function ProjectionView({ resourceId, resourceType, role, onAction }: {
+  resourceId: string; resourceType: string; role: string; onAction: () => void;
 }) {
   const [proj, setProj] = useState<Projection | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/api/interface/loan/${resourceId}?role=${role}`);
+    const res = await fetch(`${API}/api/interface/${resourceType}/${resourceId}?role=${role}`);
     if (res.ok) setProj(await res.json());
-  }, [resourceId, role]);
+  }, [resourceId, resourceType, role]);
 
   useEffect(() => { load(); }, [load]);
 
-  // WebSocket for real-time
   useEffect(() => {
     let ws: WebSocket;
     try {
-      ws = new WebSocket(`ws://localhost:8000/ws/interface/loan/${resourceId}`);
+      ws = new WebSocket(`ws://localhost:8000/ws/interface/${resourceType}/${resourceId}`);
       ws.onopen = () => ws.send(JSON.stringify({ role }));
       ws.onmessage = (e) => {
         try { const d = JSON.parse(e.data); if (d.resource) setProj(d); } catch {}
       };
     } catch {}
     return () => { try { ws?.close(); } catch {} };
-  }, [resourceId, role]);
+  }, [resourceId, resourceType, role]);
 
   const act = async (action: string) => {
     setBusy(action);
-    const res = await fetch(`${API}/api/interface/loan/${resourceId}/action`, {
+    const res = await fetch(`${API}/api/interface/${resourceType}/${resourceId}/action`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, actor: `${role}-user`, role, authority_level: 'HUMAN' }),
     });
@@ -261,7 +333,9 @@ function ProjectionView({ resourceId, role, onAction }: {
   return (
     <div className="projection">
       <div className="proj-header">
-        <span className={`state-badge state-${resource.state.toLowerCase()}`}>{resource.state}</span>
+        <span className="state-badge" style={{background: stateColor(resource.state) + '33', color: stateColor(resource.state), border: `1px solid ${stateColor(resource.state)}`}}>
+          {resource.state}
+        </span>
         {resource.is_terminal && <span className="badge terminal">TERMINAL</span>}
         <span className="badge version">v{resource.version}</span>
         <span className="badge id">{resource.id.slice(0, 8)}</span>
@@ -289,7 +363,7 @@ function ProjectionView({ resourceId, role, onAction }: {
       )}
 
       <div className="card">
-        <h3>Actions</h3>
+        <h3>Actions ({valid_actions.length} valid, {blocked_actions.length} blocked)</h3>
         {valid_actions.length === 0 ? (
           <p className="muted">{resource.is_terminal ? 'Terminal state' : `No actions for "${role}"`}</p>
         ) : (
@@ -305,7 +379,8 @@ function ProjectionView({ resourceId, role, onAction }: {
 
       {blocked_actions.length > 0 && (
         <div className="card">
-          <h3>Blocked</h3>
+          <h3>Blocked ({blocked_actions.length})</h3>
+          <div style={{maxHeight: 200, overflow: 'auto'}}>
           {blocked_actions.map((b, i) => (
             <div key={i} className="blocked">
               <span className="blocked-action">{b.action}</span>
@@ -313,11 +388,13 @@ function ProjectionView({ resourceId, role, onAction }: {
               <span className="blocked-reason">{b.reason}</span>
             </div>
           ))}
+          </div>
         </div>
       )}
 
       <div className="card">
-        <h3>Data {Object.keys(resource.data).length === 0 && <span className="muted">(restricted for this role)</span>}</h3>
+        <h3>Data ({Object.keys(resource.data).length} fields)</h3>
+        <div style={{maxHeight: 250, overflow: 'auto'}}>
         <table>
           <tbody>
             {Object.entries(resource.data).map(([k, v]) => (
@@ -325,13 +402,16 @@ function ProjectionView({ resourceId, role, onAction }: {
             ))}
           </tbody>
         </table>
+        </div>
+        {Object.keys(resource.data).length === 0 && <p className="muted">Restricted for this role</p>}
       </div>
 
       {audit_summary.length > 0 && (
         <div className="card">
           <h3>Audit Trail ({audit_summary.length})</h3>
+          <div style={{maxHeight: 200, overflow: 'auto'}}>
           <table>
-            <thead><tr><th>From</th><th>To</th><th>Actor</th><th>Authority</th></tr></thead>
+            <thead><tr><th>From</th><th>To</th><th>Actor</th><th>Auth</th></tr></thead>
             <tbody>
               {audit_summary.map((a, i) => (
                 <tr key={i}>
@@ -341,6 +421,7 @@ function ProjectionView({ resourceId, role, onAction }: {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
