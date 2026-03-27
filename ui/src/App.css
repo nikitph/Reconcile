@@ -23,11 +23,26 @@ body { font-family: -apple-system, 'Inter', sans-serif; background: var(--bg); c
 }
 .header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
 .subtitle { color: var(--muted); font-size: 14px; }
-.role-picker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.role-picker { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-left: auto; }
 .role-picker select {
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
   padding: 6px 12px; border-radius: 6px; font-size: 13px;
 }
+
+.btn-lifecycle {
+  background: var(--green); color: #000; border: none; padding: 8px 16px;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  margin-left: 12px;
+}
+.btn-lifecycle:hover { opacity: 0.9; }
+.btn-lifecycle:disabled { opacity: 0.5; cursor: not-allowed; background: var(--muted); color: var(--bg); }
+
+.log-section { margin-top: 16px; }
+.log {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;
+}
+.log-entry { padding: 2px 0; line-height: 1.5; white-space: pre-wrap; }
 
 .layout { display: flex; flex: 1; overflow: hidden; }
 
