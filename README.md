@@ -19,13 +19,13 @@ It ships as a Python package backed by a Rust core.
 ## Install
 
 ```bash
-pip install reconcile
+pip install reconcile-framework
 ```
 
 For the HTTP adapters:
 
 ```bash
-pip install "reconcile[api]"
+pip install "reconcile-framework[api]"
 ```
 
 ## A 50-Line Enterprise System

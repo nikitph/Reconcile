@@ -404,7 +404,7 @@ function Hero() {
   const opacity = useTransform(scrollYProgress, [0, 0.8], [1, 0])
 
   const handleCopy = () => {
-    navigator.clipboard.writeText('pip install reconcile')
+    navigator.clipboard.writeText('pip install reconcile-framework')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -481,7 +481,7 @@ function Hero() {
           style={{ margin: '0 auto' }}
         >
           <span className="install-badge-prefix">$</span>
-          pip install reconcile
+          pip install reconcile-framework
           <span className="install-badge-copy">{copied ? '✓ Copied!' : 'Click to copy'}</span>
         </motion.div>
       </motion.div>
