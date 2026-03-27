@@ -353,7 +353,7 @@ mod pg_tests {
 
         kernel.role_registry.register(RoleDefinition {
             name: "manager".into(),
-            permissions: vec![Permission::from_shorthand("transition:*")],
+            visible_fields: vec![], permissions: vec![Permission::from_shorthand("transition:*")],
         });
 
         // Create resource

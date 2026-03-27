@@ -238,14 +238,16 @@ impl PyReconcileSystem {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
-    /// Register a role with permissions (shorthand strings).
-    fn register_role(&mut self, name: String, permissions: Vec<String>) -> PyResult<()> {
+    /// Register a role with permissions and optional field visibility.
+    #[pyo3(signature = (name, permissions, visible_fields=vec![]))]
+    fn register_role(&mut self, name: String, permissions: Vec<String>, visible_fields: Vec<String>) -> PyResult<()> {
         let perms: Vec<Permission> = permissions
             .iter()
             .map(|p| Permission::from_shorthand(p))
             .collect();
         self.kernel.role_registry.register(RoleDefinition {
             name,
+            visible_fields,
             permissions: perms,
         });
         Ok(())
@@ -472,6 +474,12 @@ impl PyReconcileSystem {
     }
 
     // --- Schema graph ---
+
+    /// Rebuild the instance graph from existing storage data.
+    /// Call after connecting to a pre-populated database to restore graph state.
+    fn rebuild_graph(&mut self) {
+        self.kernel.rebuild_graph();
+    }
 
     /// Register a relationship between resource types.
     #[pyo3(signature = (from_type, to_type, relation, cardinality="many_to_one".to_string(), required=false, foreign_key="".to_string()))]

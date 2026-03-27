@@ -124,7 +124,43 @@ impl Kernel {
 
     /// Register a resource type with its state machine.
     pub fn register_type(&mut self, def: ResourceTypeDefinition) -> Result<(), KernelError> {
+        self.schema_graph.register_type(&def.name);
         self.registry.register(def)
+    }
+
+    /// Rebuild the instance graph from existing storage.
+    /// Call this after constructing a Kernel with a pre-populated backend (e.g. PostgreSQL)
+    /// to restore graph state that would otherwise be lost on restart.
+    pub fn rebuild_graph(&mut self) {
+        for type_name in self.registry.list_types() {
+            let resources = self.storage.state_store().list_by_type(type_name);
+            let outbound_rels = self.schema_graph.outbound_relations(type_name);
+
+            for resource in &resources {
+                // Add node
+                self.instance_graph.add_node(GraphNode {
+                    id: resource.id.clone(),
+                    resource_type: resource.resource_type.clone(),
+                    state: resource.state.clone(),
+                    data: resource.data.clone(),
+                    version: resource.version,
+                });
+
+                // Add edges from foreign keys
+                for rel in &outbound_rels {
+                    if let Some(ref_id_str) = resource.data.get(&rel.foreign_key).and_then(|v| v.as_str()) {
+                        if let Ok(ref_uuid) = uuid::Uuid::parse_str(ref_id_str) {
+                            self.instance_graph.add_edge(GraphEdge {
+                                from_id: resource.id.clone(),
+                                to_id: ResourceId(ref_uuid),
+                                relation: rel.relation.clone(),
+                                metadata: serde_json::json!({}),
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Create a new resource in its initial state.
@@ -990,14 +1026,14 @@ mod tests {
     fn register_roles(kernel: &mut Kernel) {
         kernel.role_registry.register(RoleDefinition {
             name: "officer".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:UNDERWRITING"),
             ],
         });
         kernel.role_registry.register(RoleDefinition {
             name: "manager".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:*"),
             ],

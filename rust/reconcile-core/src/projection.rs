@@ -209,14 +209,16 @@ pub fn compute_projection(
         })
         .collect();
 
-    // Step 7: Assemble
+    // Step 7: Assemble — filter data fields by role visibility
+    let visible_data = role_registry.filter_visible_fields(role, &resource.data);
+
     InterfaceProjection {
         resource: ProjectedResource {
             id: resource.id.to_string(),
             resource_type: resource_type.clone(),
             state: current_state.clone(),
             desired_state: resource.desired_state.clone(),
-            data: resource.data.clone(),
+            data: visible_data,
             version: resource.version,
             is_terminal,
         },
@@ -272,14 +274,14 @@ mod tests {
         let mut reg = RoleRegistry::new();
         reg.register(RoleDefinition {
             name: "clerk".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:UNDERWRITING"),
             ],
         });
         reg.register(RoleDefinition {
             name: "officer".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:APPROVED"),
                 Permission::from_shorthand("transition:REJECTED"),
@@ -287,14 +289,14 @@ mod tests {
         });
         reg.register(RoleDefinition {
             name: "manager".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:*"),
             ],
         });
         reg.register(RoleDefinition {
             name: "viewer".into(),
-            permissions: vec![Permission::from_shorthand("view")],
+            visible_fields: vec![], permissions: vec![Permission::from_shorthand("view")],
         });
         reg
     }

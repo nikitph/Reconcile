@@ -48,14 +48,14 @@ mod loan_origination {
         // Roles: clerk, officer, senior_officer, manager
         kernel.role_registry.register(RoleDefinition {
             name: "clerk".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:DOCUMENT_CHECK"),
             ],
         });
         kernel.role_registry.register(RoleDefinition {
             name: "officer".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:UNDERWRITING"),
                 Permission::from_shorthand("transition:REJECTED"),
@@ -63,7 +63,7 @@ mod loan_origination {
         });
         kernel.role_registry.register(RoleDefinition {
             name: "senior_officer".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:APPROVED"),
                 Permission::from_shorthand("transition:SENIOR_REVIEW"),
@@ -72,7 +72,7 @@ mod loan_origination {
         });
         kernel.role_registry.register(RoleDefinition {
             name: "manager".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:*"),
             ],
@@ -319,7 +319,7 @@ mod insurance_claims {
 
         kernel.role_registry.register(RoleDefinition {
             name: "adjuster".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:UNDER_INVESTIGATION"),
                 Permission::from_shorthand("transition:ASSESSED"),
@@ -328,7 +328,7 @@ mod insurance_claims {
         });
         kernel.role_registry.register(RoleDefinition {
             name: "supervisor".into(),
-            permissions: vec![
+            visible_fields: vec![], permissions: vec![
                 Permission::from_shorthand("transition:*"),
             ],
         });

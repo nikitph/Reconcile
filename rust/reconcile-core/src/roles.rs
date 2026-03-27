@@ -38,6 +38,8 @@ impl Permission {
 pub struct RoleDefinition {
     pub name: String,
     pub permissions: Vec<Permission>,
+    /// Which data fields this role can see. Empty or ["*"] = all fields visible.
+    pub visible_fields: Vec<String>,
 }
 
 pub struct RoleRegistry {
@@ -75,6 +77,35 @@ impl RoleRegistry {
     pub fn has_role(&self, name: &str) -> bool {
         self.roles.contains_key(name)
     }
+
+    /// Filter a JSON data object to only include fields visible to this role.
+    /// Returns all fields if the role has no field restrictions (empty or ["*"]).
+    pub fn filter_visible_fields(&self, role: &str, data: &serde_json::Value) -> serde_json::Value {
+        let role_def = match self.roles.get(role) {
+            Some(r) => r,
+            None => return serde_json::Value::Object(serde_json::Map::new()), // Unknown role sees nothing
+        };
+
+        // Empty or ["*"] = all fields visible
+        if role_def.visible_fields.is_empty()
+            || role_def.visible_fields.iter().any(|f| f == "*")
+        {
+            return data.clone();
+        }
+
+        // Filter to only permitted fields
+        match data.as_object() {
+            Some(map) => {
+                let filtered: serde_json::Map<String, serde_json::Value> = map
+                    .iter()
+                    .filter(|(key, _)| role_def.visible_fields.iter().any(|f| f == key.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                serde_json::Value::Object(filtered)
+            }
+            None => data.clone(),
+        }
+    }
 }
 
 impl Default for RoleRegistry {
@@ -91,6 +122,7 @@ mod tests {
         let mut reg = RoleRegistry::new();
         reg.register(RoleDefinition {
             name: "officer".into(),
+            visible_fields: vec![],
             permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:UNDERWRITING"),
@@ -98,6 +130,7 @@ mod tests {
         });
         reg.register(RoleDefinition {
             name: "manager".into(),
+            visible_fields: vec![],
             permissions: vec![
                 Permission::from_shorthand("view"),
                 Permission::from_shorthand("transition:*"),
@@ -149,5 +182,58 @@ mod tests {
         let p = Permission::from_shorthand("transition:UNDERWRITING");
         assert_eq!(p.action, "transition");
         assert_eq!(p.in_states, vec!["UNDERWRITING"]);
+    }
+
+    #[test]
+    fn test_visible_fields_all() {
+        let mut reg = RoleRegistry::new();
+        reg.register(RoleDefinition {
+            name: "admin".into(),
+            visible_fields: vec![], // Empty = all fields
+            permissions: vec![],
+        });
+
+        let data = serde_json::json!({"amount": 100, "pan": "ABCDE1234F", "name": "Acme"});
+        let filtered = reg.filter_visible_fields("admin", &data);
+        assert_eq!(filtered, data); // All fields visible
+    }
+
+    #[test]
+    fn test_visible_fields_restricted() {
+        let mut reg = RoleRegistry::new();
+        reg.register(RoleDefinition {
+            name: "viewer".into(),
+            visible_fields: vec!["amount".into(), "name".into()],
+            permissions: vec![],
+        });
+
+        let data = serde_json::json!({"amount": 100, "pan": "ABCDE1234F", "name": "Acme"});
+        let filtered = reg.filter_visible_fields("viewer", &data);
+
+        assert_eq!(filtered.get("amount").unwrap(), &serde_json::json!(100));
+        assert_eq!(filtered.get("name").unwrap(), &serde_json::json!("Acme"));
+        assert!(filtered.get("pan").is_none()); // PII hidden
+    }
+
+    #[test]
+    fn test_visible_fields_wildcard() {
+        let mut reg = RoleRegistry::new();
+        reg.register(RoleDefinition {
+            name: "super".into(),
+            visible_fields: vec!["*".into()],
+            permissions: vec![],
+        });
+
+        let data = serde_json::json!({"amount": 100, "pan": "ABCDE1234F"});
+        let filtered = reg.filter_visible_fields("super", &data);
+        assert_eq!(filtered, data);
+    }
+
+    #[test]
+    fn test_unknown_role_sees_nothing() {
+        let reg = RoleRegistry::new();
+        let data = serde_json::json!({"secret": "value"});
+        let filtered = reg.filter_visible_fields("nonexistent", &data);
+        assert_eq!(filtered, serde_json::json!({}));
     }
 }
